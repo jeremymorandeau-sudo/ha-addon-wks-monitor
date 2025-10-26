@@ -9,5 +9,10 @@ boot: auto
 uart: true
 init: false
 homeassistant_api: false
+
+# 🧩 Image Docker hébergée sur GitHub (pour que HA puisse la télécharger automatiquement)
+image: "ghcr.io/jeremymorandeau-sudo/wks-monitor-{arch}"
+
+# ⚙️ Options par défaut (personnalisables plus tard via l’interface HA)
 options: {}
 schema: {}
