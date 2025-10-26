@@ -10,4 +10,3 @@ uart: true
 homeassistant_api: false
 options: {}
 schema: {}
-image: "local/amd64-addon-wks_monitor"
