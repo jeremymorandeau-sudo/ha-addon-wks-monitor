@@ -88,8 +88,10 @@ def parse_qpgs(index, resp):
 
 
 def log(msg):
+    """Affiche un message avec date/heure précise et flush immédiat."""
     now = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-    print(f"{now} {msg}")
+    print(f"{now} {msg}", flush=True)
+    sys.stdout.flush()
 
 
 def publish_data(client, topic, data):
