@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 import serial, time, json, sys
 import paho.mqtt.client as mqtt
+import warnings
+
+# --- IGNORER les avertissements de dépréciation ---
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # --- CONFIG MQTT ---
 MQTT_BROKER = "core-mosquitto"   # broker local de Home Assistant
@@ -114,8 +118,11 @@ def main():
     mqtt_client = init_mqtt()
     current_interval = REFRESH_INTERVAL
     consecutive_errors = 0
+    cycle = 0
 
     while True:
+        cycle += 1
+        print(f"🔄 Cycle {cycle} — intervalle {current_interval}s")
         try:
             with serial.Serial(PORT, BAUD, timeout=TIMEOUT) as ser:
                 for n in INDEXES:
@@ -123,6 +130,7 @@ def main():
                     if resp and "NAK" not in resp and "00000000000000" not in resp:
                         parsed = parse_qpgs(n, resp)
                         publish_data(mqtt_client, f"{MQTT_TOPIC_BASE}/{n}/status", parsed)
+                        print(f"✅ QPGS{n} OK")
                         consecutive_errors = 0
                     else:
                         print(f"⚠️ Aucune réponse ou trame invalide pour QPGS{n}")
@@ -140,6 +148,7 @@ def main():
             consecutive_errors += 1
             current_interval = 3
 
+        print(f"⏳ Pause {current_interval}s...\n")
         time.sleep(current_interval)
 
 
