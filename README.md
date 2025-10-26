@@ -1,16 +1,22 @@
-# 🧠 WKS Monitor Add-on pour Home Assistant
+# ☀️ WKS Monitor (Home Assistant Add-on)
 
-Cet add-on lit les trames QPGS0, QPGS1, QPGS2 des onduleurs Voltronic / WKS 5kVA en parallèle, et publie leurs données sur MQTT (wks/0/status, wks/1/status, wks/2/status).
+Add-on qui lit les trames **QPGS0/1/2** d'onduleurs **WKS / Voltronic** en parallèle et publie sur **MQTT** :  
+`wks/0/status`, `wks/1/status`, `wks/2/status`.
 
-## ⚙️ Configuration
+## 🔧 Configuration par défaut
+- Port série : `/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BWAAc143M08-if00-port0`
+- Vitesse : `2400 bauds`
+- Broker MQTT : `core-mosquitto` (`jeremy` / `123456`)
+- Intervalle de lecture : `2s` (adaptatif si erreurs)
 
-- MQTT Broker : core-mosquitto
-- Périphérique série : /dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BWAAc143M08-if00-port0
-- Lecture toutes les 2 secondes, avec adaptation automatique en cas d’erreurs.
+## 📦 Installation (via GitHub)
+1. Créez un dépôt GitHub **public** nommé `wks-monitor` et uploadez le contenu de ce dossier.
+2. Dans Home Assistant : **Paramètres → Modules complémentaires → Magasin → ⋮ → Dépôts → Ajouter**  
+   Entrez : `https://github.com/jejelaprairie/wks-monitor`
+3. Installez **WKS Monitor**, démarrez-le et ouvrez les logs.
 
-## 🧩 Installation
+## 🧪 Vérification
+Dans **Outils de développement → MQTT → Écouter `wks/#`** :  
+vous verrez les JSON pour `index` 0, 1 et 2.
 
-1. Ajoutez le dépôt GitHub dans Home Assistant :
-   https://github.com/<TON_UTILISATEUR>/ha-addon-wks-monitor
-2. Installez l’add-on WKS Monitor
-3. Démarrez-le et ouvrez les logs pour suivre les trames.
+— *by jejelaprairie*
