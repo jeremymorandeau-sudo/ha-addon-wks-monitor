@@ -1,5 +1,3 @@
-{
-  "name": "jejelaprairie Add-ons",
-  "url": "https://github.com/jejelaprairie/wks-monitor",
-  "maintainer": "jejelaprairie"
-}
+name: "WKS Monitor Add-ons"
+url: "https://github.com/jeremymorandeau-sudo/ha-addon-wks-monitor"
+maintainer: "Jeremy Morandeau (jejelaprairie)"
