@@ -1,5 +1,5 @@
 name: "WKS Monitor"
-version: "auto"
+version: "auto..1"
 slug: "wks_monitor"
 description: "Lecture des onduleurs WKS/Voltronic en parallèle (QPGS0–2) et publication MQTT"
 arch:
@@ -9,10 +9,8 @@ boot: auto
 uart: true
 init: false
 homeassistant_api: false
-
 # 🧩 Image Docker hébergée sur GitHub Container Registry
 image: "ghcr.io/jeremymorandeau-sudo/wks-monitor-{arch}"
-
 # ⚙️ Options configurables depuis l’interface Home Assistant
 options:
   port: "/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BWAAc143M08-if00-port0"
@@ -21,7 +19,6 @@ options:
   mqtt_port: 1883
   mqtt_topic: "wks"
   scan_interval: 5
-
 schema:
   port: str
   baudrate: int
