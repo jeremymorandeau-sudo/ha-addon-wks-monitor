@@ -6,13 +6,14 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write     # permet de pousser version + tag
+  packages: write     # permet de publier sur GHCR
+  id-token: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write     # permet de pousser version + tag
-      packages: write     # permet de publier sur GHCR
-      id-token: write
 
     steps:
       - name: Checkout repository
