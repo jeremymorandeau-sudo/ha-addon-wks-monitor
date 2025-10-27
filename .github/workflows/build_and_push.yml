@@ -28,7 +28,7 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          RAW=$(yq '.version' wks-monitor/config.yaml | tr -d '"')
+          RAW=$(yq e '.version' wks-monitor/config.yaml | tr -d '"')
           if [[ "$RAW" == "auto" || -z "$RAW" ]]; then
             RAW="0.0.0"
           fi
@@ -45,7 +45,7 @@ jobs:
           fi
           NEW="$MAJ.$MIN.$((PATCH+1))"
           echo "Bumping to version $NEW"
-          yq -i ".version = \"$NEW\"" wks-monitor/config.yaml
+          yq e -i ".version = \"$NEW\"" wks-monitor/config.yaml
           echo "new=$NEW" >> $GITHUB_OUTPUT
 
       # 🧩 Commit et push du config.yaml mis à jour
@@ -56,7 +56,7 @@ jobs:
           git add wks-monitor/config.yaml
           git commit -m "🔖 Bump version to ${{ steps.bump.outputs.new }}" || echo "No changes to commit"
           git pull --rebase origin main || true
-          git push origin HEAD:main --force
+          git push origin HEAD:main
 
       # 🧩 Build Docker
       - name: Set up Docker Buildx
@@ -75,6 +75,7 @@ jobs:
           context: ./wks-monitor
           file: ./wks-monitor/Dockerfile
           push: true
+          platforms: linux/amd64
           tags: |
             ghcr.io/${{ github.repository_owner }}/wks-monitor-amd64:${{ steps.bump.outputs.new }}
             ghcr.io/${{ github.repository_owner }}/wks-monitor-amd64:latest
