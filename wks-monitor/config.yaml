@@ -10,9 +10,22 @@ uart: true
 init: false
 homeassistant_api: false
 
-# 🧩 Image Docker hébergée sur GitHub (pour que HA puisse la télécharger automatiquement)
+# 🧩 Image Docker hébergée sur GitHub Container Registry
 image: "ghcr.io/jeremymorandeau-sudo/wks-monitor-{arch}"
 
-# ⚙️ Options par défaut (personnalisables plus tard via l’interface HA)
-options: {}
-schema: {}
+# ⚙️ Options configurables depuis l’interface Home Assistant
+options:
+  port: "/dev/ttyUSB0"
+  baudrate: 2400
+  mqtt_host: "core-mosquitto"
+  mqtt_port: 1883
+  mqtt_topic: "wks"
+  scan_interval: 5
+
+schema:
+  port: str
+  baudrate: int
+  mqtt_host: str
+  mqtt_port: int
+  mqtt_topic: str
+  scan_interval: int
