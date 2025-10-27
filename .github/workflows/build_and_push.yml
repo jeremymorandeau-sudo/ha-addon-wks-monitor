@@ -10,8 +10,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write     # <— permet de pousser version + tag
-      packages: write
+      contents: write     # permet de pousser version + tag
+      packages: write     # permet de publier sur GHCR
       id-token: write
 
     steps:
@@ -23,19 +23,25 @@ jobs:
       - name: Set up yq
         uses: mikefarah/yq@v4.44.2
 
-      # 🧩 Lire la version actuelle dans config.yaml
-      - name: Read current version
+      # 🧩 Lecture de la version actuelle (gère "auto" ou vide)
+      - name: Determine version
         id: version
         run: |
-          CURRENT=$(yq '.version' wks-monitor/config.yaml | tr -d '"')
-          echo "Current version: $CURRENT"
-          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          RAW=$(yq '.version' wks-monitor/config.yaml | tr -d '"')
+          if [[ "$RAW" == "auto" || -z "$RAW" ]]; then
+            RAW="0.0.0"
+          fi
+          echo "Current version: $RAW"
+          echo "current=$RAW" >> $GITHUB_OUTPUT
 
-      # 🧩 Incrémenter le numéro de version (patch)
+      # 🧩 Incrémentation robuste du numéro de version (patch)
       - name: Increment patch version
         id: bump
         run: |
           IFS='.' read -r MAJ MIN PATCH <<< "${{ steps.version.outputs.current }}"
+          if [[ -z "$MAJ" || -z "$MIN" || -z "$PATCH" ]]; then
+            MAJ=1; MIN=0; PATCH=0
+          fi
           NEW="$MAJ.$MIN.$((PATCH+1))"
           echo "Bumping to version $NEW"
           yq -i ".version = \"$NEW\"" wks-monitor/config.yaml
@@ -47,7 +53,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add wks-monitor/config.yaml
-          git commit -m "🔖 Bump version to ${{ steps.bump.outputs.new }}"
+          git commit -m "🔖 Bump version to ${{ steps.bump.outputs.new }}" || echo "No changes to commit"
           git push
 
       # 🧩 Build Docker
