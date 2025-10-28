@@ -10,6 +10,7 @@ uart: true
 init: false
 homeassistant_api: false
 image: "ghcr.io/jeremymorandeau-sudo/wks-monitor-{arch}"
+
 options:
   port: "/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BWAAc143M08-if00-port0"
   baudrate: 2400
@@ -26,6 +27,8 @@ options:
   set_bulk_voltage: 56.4
   set_back_to_grid_voltage: 48.0
   set_back_to_battery_voltage: 51.0
+  dry_run: false
+
 schema:
   port: str
   baudrate: int
@@ -42,5 +45,7 @@ schema:
   set_bulk_voltage: float
   set_back_to_grid_voltage: float
   set_back_to_battery_voltage: float
+  dry_run: bool
+
 icon: "icon.png"
 logo: "logo.png"
