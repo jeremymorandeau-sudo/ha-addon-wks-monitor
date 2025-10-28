@@ -10,12 +10,15 @@ uart: true
 init: false
 homeassistant_api: false
 image: "ghcr.io/jeremymorandeau-sudo/wks-monitor-{arch}"
+
 options:
   port: "/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BWAAc143M08-if00-port0"
   baudrate: 2400
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883
-  mqtt_topic: "wks"
+  mqtt_user: "jeremy"
+  mqtt_pass: "123456"
+  mqtt_topic_base: "wks"             # ✅ renommé pour cohérence historique
   scan_interval: 5
   apply_settings_on_start: false
   set_output_priority: 2
@@ -27,12 +30,15 @@ options:
   set_back_to_grid_voltage: 48.0
   set_back_to_battery_voltage: 51.0
   dry_run: false
+
 schema:
   port: str
   baudrate: int
   mqtt_host: str
   mqtt_port: int
-  mqtt_topic: str
+  mqtt_user: str
+  mqtt_pass: str
+  mqtt_topic_base: str
   scan_interval: int
   apply_settings_on_start: bool
   set_output_priority: int
@@ -44,5 +50,6 @@ schema:
   set_back_to_grid_voltage: float
   set_back_to_battery_voltage: float
   dry_run: bool
+
 icon: "icon.png"
 logo: "logo.png"
