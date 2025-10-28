@@ -49,7 +49,7 @@ def init_mqtt(host, port, user=None, password=None):
 
 def publish_data(client, topic, data):
     payload = json.dumps(data)
-    client.publish(topic, payload, qos=0, retain=True)
+    client.publish(topic, payload, qos=0, retain=False)
     log(f"📤 Publié sur {topic}")
 
 def send_cmd(ser, cmd_ascii: str, delay=0.25):
