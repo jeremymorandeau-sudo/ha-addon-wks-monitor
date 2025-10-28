@@ -1,7 +1,7 @@
 name: "WKS Monitor"
-version: "1.0.7"
+version: "2.0.0"
 slug: "wks_monitor"
-description: "Lecture des onduleurs WKS/Voltronic en parallèle (QPGS0–2) et publication MQTT"
+description: "Lecture des onduleurs WKS/Voltronic en parallèle (QPGS0–2) et publication MQTT, avec probes QPIRI/QPIGS et paramétrage MKS (dry-run)."
 arch:
   - amd64
 startup: application
@@ -9,9 +9,9 @@ boot: auto
 uart: true
 init: false
 homeassistant_api: false
-# 🧩 Image Docker hébergée sur GitHub Container Registry
+
 image: "ghcr.io/jeremymorandeau-sudo/wks-monitor-{arch}"
-# ⚙️ Options configurables depuis l’interface Home Assistant
+
 options:
   port: "/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BWAAc143M08-if00-port0"
   baudrate: 2400
@@ -19,6 +19,17 @@ options:
   mqtt_port: 1883
   mqtt_topic: "wks"
   scan_interval: 5
+
+  apply_settings_on_start: false
+  set_output_priority: 2
+  set_charge_priority: 2
+  set_ac_charge_current: 20
+  set_pv_charge_current: 60
+  set_float_voltage: 54.8
+  set_bulk_voltage: 56.4
+  set_back_to_grid_voltage: 48.0
+  set_back_to_battery_voltage: 51.0
+
 schema:
   port: str
   baudrate: int
@@ -26,3 +37,15 @@ schema:
   mqtt_port: int
   mqtt_topic: str
   scan_interval: int
+  apply_settings_on_start: bool
+  set_output_priority: int
+  set_charge_priority: int
+  set_ac_charge_current: int
+  set_pv_charge_current: int
+  set_float_voltage: float
+  set_bulk_voltage: float
+  set_back_to_grid_voltage: float
+  set_back_to_battery_voltage: float
+
+icon: "icon.png"
+logo: "logo.png"

@@ -1,34 +1,56 @@
 #!/usr/bin/env python3
-import serial, time, json, paho.mqtt.client as mqtt, sys, warnings
+import serial, time, json, paho.mqtt.client as mqtt, sys, warnings, os
 from datetime import datetime
+from utils import log, crc16
+from serial_comm import read_cmd
+from settings_writer import apply_settings
 
-# Ignore les warnings de dépréciation
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# --- CONFIG MQTT ---
-MQTT_BROKER = "core-mosquitto"   # broker local de Home Assistant
-MQTT_PORT = 1883
-MQTT_USER = "jeremy"
-MQTT_PASS = "123456"
-MQTT_TOPIC_BASE = "wks"
+DEFAULTS = {
+    "port": "/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BWAAc143M08-if00-port0",
+    "baudrate": 2400,
+    "mqtt_host": "core-mosquitto",
+    "mqtt_port": 1883,
+    "mqtt_topic": "wks",
+    "scan_interval": 5,
+    "apply_settings_on_start": False,
+    "set_output_priority": 2,
+    "set_charge_priority": 2,
+    "set_ac_charge_current": 20,
+    "set_pv_charge_current": 60,
+    "set_float_voltage": 54.8,
+    "set_bulk_voltage": 56.4,
+    "set_back_to_grid_voltage": 48.0,
+    "set_back_to_battery_voltage": 51.0
+}
 
-# --- CONFIG SÉRIE ---
-PORT = "/dev/ttyUSB1"
-BAUD = 2400
-INDEXES = [0, 1, 2]
-REFRESH_INTERVAL = 2     # secondes nominales
-TIMEOUT = 2
+def load_config():
+    cfg = DEFAULTS.copy()
+    path = "/data/options.json"
+    try:
+        if os.path.exists(path):
+            with open(path) as f:
+                loaded = json.load(f)
+            for k in DEFAULTS.keys():
+                if k in loaded:
+                    cfg[k] = loaded[k]
+    except Exception as e:
+        log(f"⚠️ Erreur lecture /data/options.json: {e} — valeurs par défaut utilisées.")
+    return cfg
 
-# --- CRC16 XMODEM ---
-def crc16(data: bytes):
-    crc = 0
-    for b in data:
-        crc ^= b << 8
-        for _ in range(8):
-            crc = (crc << 1) ^ 0x1021 if crc & 0x8000 else crc << 1
-            crc &= 0xFFFF
-    return crc
+def init_mqtt(host, port, user=None, password=None):
+    client = mqtt.Client()
+    if user and password:
+        client.username_pw_set(user, password)
+    client.connect(host, port, 60)
+    client.loop_start()
+    return client
 
+def publish_data(client, topic, data):
+    payload = json.dumps(data)
+    client.publish(topic, payload, qos=0, retain=True)
+    log(f"📤 Publié sur {topic}")
 
 def send_cmd(ser, cmd_ascii: str, delay=0.25):
     cmd = cmd_ascii.encode("ascii")
@@ -37,7 +59,6 @@ def send_cmd(ser, cmd_ascii: str, delay=0.25):
     ser.write(full)
     time.sleep(delay)
     return ser.readline().decode(errors="ignore").strip()
-
 
 def decode_flags(binary_str):
     if len(binary_str) != 8:
@@ -53,7 +74,6 @@ def decode_flags(binary_str):
         "load_on_battery": bits[6] == "1",
         "overload": bits[7] == "1"
     }
-
 
 def parse_qpgs(index, resp):
     vals = resp.strip("()").split()
@@ -86,37 +106,37 @@ def parse_qpgs(index, resp):
         data["error"] = str(e)
     return data
 
-
-def log(msg):
-    """Affiche un message avec date/heure précise et flush immédiat."""
-    now = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-    print(f"{now} {msg}", flush=True)
-    sys.stdout.flush()
-
-
-def publish_data(client, topic, data):
-    payload = json.dumps(data)
-    client.publish(topic, payload, qos=0, retain=True)
-    log(f"📤 Publié sur {topic}")
-
-
-def init_mqtt():
-    client = mqtt.Client()
-    client.username_pw_set(MQTT_USER, MQTT_PASS)
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    client.loop_start()
-    return client
-
-
 def main():
-    log(f"🚀 Lancement du lecteur WKS - rafraîchissement {REFRESH_INTERVAL}s (auto-ajustable)")
-    mqtt_client = init_mqtt()
-    current_interval = REFRESH_INTERVAL
+    cfg = load_config()
+    PORT = cfg["port"]
+    BAUD = int(cfg["baudrate"])
+    MQTT_HOST = cfg["mqtt_host"]
+    MQTT_PORT = int(cfg["mqtt_port"])
+    MQTT_TOPIC_BASE = cfg["mqtt_topic"]
+    REFRESH_INTERVAL = int(cfg["scan_interval"])
+    APPLY = bool(cfg.get("apply_settings_on_start", False))
+
+    log(f"🚀 WKS Monitor v2.0.0 — port={PORT} baud={BAUD} mqtt={MQTT_HOST}:{MQTT_PORT} topic={MQTT_TOPIC_BASE}")
+    mqtt_client = init_mqtt(MQTT_HOST, MQTT_PORT)
     consecutive_errors = 0
+    INDEXES = [0, 1, 2]
 
     while True:
         try:
-            with serial.Serial(PORT, BAUD, timeout=TIMEOUT) as ser:
+            with serial.Serial(PORT, BAUD, timeout=2) as ser:
+                log("✅ Port série ouvert.")
+                for cmd, label in [("QPIRI","QPIRI"),("QPIGS","QPIGS"),("QMOD","QMOD"),("QPIWS","QPIWS"),("QFLAG","QFLAG"),("QVFW","QVFW"),("QID","QID")]:
+                    try:
+                        resp = read_cmd(ser, cmd)
+                        log(f"📥 {label}: {resp}")
+                    except Exception as e:
+                        log(f"⚠️ {label} erreur: {e}")
+
+                try:
+                    apply_settings(ser, cfg, dry_run=(not APPLY))
+                except Exception as e:
+                    log(f"⚠️ Paramétrage: {e}")
+
                 for n in INDEXES:
                     resp = send_cmd(ser, f"QPGS{n}")
                     if resp and "NAK" not in resp and "00000000000000" not in resp:
@@ -128,20 +148,13 @@ def main():
                         log(f"⚠️ Aucune réponse ou trame invalide pour QPGS{n}")
                         consecutive_errors += 1
 
-            if consecutive_errors >= 3:
-                current_interval = 3
-                log("⚠️ Communication instable, passage temporaire à 3s")
-            else:
-                current_interval = REFRESH_INTERVAL
-
         except Exception as e:
             log(f"❌ Erreur série : {e}")
             consecutive_errors += 1
-            current_interval = 3
 
-        log(f"⏳ Pause {current_interval}s...\n")
-        time.sleep(current_interval)
-
+        pause = 3 if consecutive_errors >= 3 else REFRESH_INTERVAL
+        log(f"⏳ Pause {pause}s...\n")
+        time.sleep(pause)
 
 if __name__ == "__main__":
     try:
