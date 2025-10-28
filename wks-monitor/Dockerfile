@@ -1,6 +1,5 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
-FROM ${BUILD_FROM}
-WORKDIR /app
-COPY . /app/
-RUN apk add --no-cache python3 py3-pip &&         pip install --break-system-packages --no-cache-dir pyserial paho-mqtt
-ENTRYPOINT ["python3", "/app/wks_monitor.py"]
+FROM python:3.12-alpine
+WORKDIR /
+COPY . .
+RUN pip install --no-cache-dir paho-mqtt pyserial
+CMD ["bash", "/run.sh"]
