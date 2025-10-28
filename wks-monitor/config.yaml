@@ -1,5 +1,5 @@
 name: "WKS Monitor"
-version: "2.0.1"
+version: "2.0.2"
 slug: "wks_monitor"
 description: "Lecture des onduleurs WKS/Voltronic en parallèle (QPGS0–2) et publication MQTT, avec probes QPIRI/QPIGS et paramétrage MKS (dry-run)."
 arch:
