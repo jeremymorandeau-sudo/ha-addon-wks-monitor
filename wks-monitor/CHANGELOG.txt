@@ -1,9 +1,0 @@
-🧩 WKS Monitor — Version 2.0.4-B
---------------------------------
-• Mode lecture seule permanent (aucune commande envoyée)
-• Correction du flux MQTT (préservation des historiques Home Assistant)
-• Lecture stable des 3 onduleurs (index 0-2)
-• Amélioration du parsing QPGS / QPIRI / QPIGS
-• Ajout de logs colorés [HH:MM:SS]
-• Bannière colorée au démarrage (run.sh)
-• Nettoyage des dépendances et cohérence config.yaml
