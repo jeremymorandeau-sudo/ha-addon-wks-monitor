@@ -1,5 +1,5 @@
 name: "WKS Monitor"
-version: "2.0.1-serial-fix"
+version: "2.0.2"
 slug: "wks_monitor"
 description: "Lecture fiable des onduleurs WKS/Voltronic (QPGS0–2) + MQTT — gestion série robuste"
 arch:
@@ -10,7 +10,6 @@ uart: true
 init: false
 homeassistant_api: false
 apparmor: false
-
 options:
   port: "/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BWAAc143M08-if00-port0"
   baudrate: 2400
@@ -25,7 +24,6 @@ options:
   read_timeout: 2.5
   open_retry_sec: 3
   max_consecutive_fail: 10
-
 schema:
   port: str
   baudrate: int
@@ -40,10 +38,8 @@ schema:
   read_timeout: float
   open_retry_sec: int
   max_consecutive_fail: int
-
 privileged:
   - SYS_RAWIO
-
 stdin: true
 ingress: false
 ports: {}
