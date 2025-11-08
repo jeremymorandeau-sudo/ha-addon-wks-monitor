@@ -1,15 +1,16 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
-FROM ${BUILD_FROM}
+FROM python:3.12-slim
 
-# Configuration locale du conteneur
+ENV PYTHONDONTWRITEBYTECODE=1     PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends       bash ca-certificates tzdata     && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copie du script principal
-COPY wks_monitor.py /app/
+COPY wks_monitor.py /app/wks_monitor.py
+COPY run.sh /app/run.sh
 
-# Installation des dépendances Python
-RUN apk add --no-cache python3 py3-pip && \
-    pip install --break-system-packages --no-cache-dir pyserial paho-mqtt
+RUN chmod +x /app/run.sh
 
-# --- Démarrage direct du script sans shell intermédiaire ---
-ENTRYPOINT ["python3", "/app/wks_monitor.py"]
+CMD ["/app/run.sh"]

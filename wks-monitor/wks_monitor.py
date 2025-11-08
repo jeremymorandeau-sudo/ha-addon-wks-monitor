@@ -1,151 +1,183 @@
-#!/usr/bin/env python3
-import serial, time, json, paho.mqtt.client as mqtt, sys, warnings
-from datetime import datetime
+import json
+import os
+import sys
+import time
+import threading
+from pathlib import Path
 
-# Ignore les warnings de dépréciation
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+import paho.mqtt.client as mqtt
+import serial
 
-# --- CONFIG MQTT ---
-MQTT_BROKER = "core-mosquitto"   # broker local de Home Assistant
-MQTT_PORT = 1883
-MQTT_USER = "jeremy"
-MQTT_PASS = "123456"
-MQTT_TOPIC_BASE = "wks"
-
-# --- CONFIG SÉRIE ---
-PORT = "/dev/ttyUSB1"
-BAUD = 2400
-INDEXES = [0, 1, 2]
-REFRESH_INTERVAL = 2     # secondes nominales
-TIMEOUT = 2
-
-# --- CRC16 XMODEM ---
-def crc16(data: bytes):
-    crc = 0
-    for b in data:
-        crc ^= b << 8
-        for _ in range(8):
-            crc = (crc << 1) ^ 0x1021 if crc & 0x8000 else crc << 1
-            crc &= 0xFFFF
-    return crc
-
-
-def send_cmd(ser, cmd_ascii: str, delay=0.25):
-    cmd = cmd_ascii.encode("ascii")
-    c = crc16(cmd)
-    full = cmd + bytes([(c >> 8) & 0xFF, c & 0xFF]) + b"\r"
-    ser.write(full)
-    time.sleep(delay)
-    return ser.readline().decode(errors="ignore").strip()
-
-
-def decode_flags(binary_str):
-    if len(binary_str) != 8:
-        return {"raw": binary_str}
-    bits = list(binary_str)
-    return {
-        "inverter_output": bits[0] == "1",
-        "fault": bits[1] == "1",
-        "bypass": bits[2] == "1",
-        "battery_charging": bits[3] == "1",
-        "ac_input_present": bits[4] == "1",
-        "pv_charging": bits[5] == "1",
-        "load_on_battery": bits[6] == "1",
-        "overload": bits[7] == "1"
-    }
-
-
-def parse_qpgs(index, resp):
-    vals = resp.strip("()").split()
-    data = {"index": index, "raw": resp}
-    if len(vals) < 25:
-        data["error"] = f"Trame incomplète ({len(vals)} valeurs)"
-        return data
-    try:
-        data.update({
-            "serial_number": vals[1],
-            "device_type": vals[2],
-            "ac_output_voltage": float(vals[6]),
-            "ac_output_freq": float(vals[7]),
-            "output_active_power_w": int(vals[9]),
-            "output_load_pct": int(vals[10]),
-            "battery_voltage": float(vals[11]),
-            "battery_charge_current_a": int(vals[12]),
-            "battery_capacity_pct": int(vals[13]),
-            "pv_input_voltage": float(vals[14]),
-            "pv_input_current_a": int(vals[15]),
-            "heatsink_temp": int(vals[16]),
-            "dc_bus_voltage": int(vals[17]),
-            "status_flags_raw": vals[19],
-            "status_flags": decode_flags(vals[19]),
-            "parallel_role": "Master" if vals[20] == "1" else "Slave",
-            "total_units": int(vals[21]),
-            "battery_temp_c": vals[24] if len(vals) > 24 else ""
-        })
-    except Exception as e:
-        data["error"] = str(e)
-    return data
-
+OPTIONS_PATH = Path("/data/options.json")
 
 def log(msg):
-    """Affiche un message avec date/heure précise et flush immédiat."""
-    now = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-    print(f"{now} {msg}", flush=True)
-    sys.stdout.flush()
+    print(msg, flush=True)
 
+def load_options():
+    with open(OPTIONS_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-def publish_data(client, topic, data):
-    payload = json.dumps(data)
-    client.publish(topic, payload, qos=0, retain=True)
-    log(f"📤 Publié sur {topic}")
+class SerialReader:
+    def __init__(self, port, baudrate, timeout, open_retry_sec=3, debug=False):
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.open_retry_sec = open_retry_sec
+        self.debug = debug
+        self.ser = None
+        self.lock = threading.Lock()
 
+    def open(self):
+        while True:
+            try:
+                if self.debug:
+                    log(f"[SERIAL] Ouverture {self.port} @ {self.baudrate} 8N1 (timeout {self.timeout}s)")
+                self.ser = serial.Serial(
+                    self.port,
+                    baudrate=self.baudrate,
+                    bytesize=8,
+                    parity=serial.PARITY_NONE,
+                    stopbits=1,
+                    timeout=self.timeout,
+                    write_timeout=self.timeout,
+                    exclusive=True
+                )
+                time.sleep(1.0)
+                if self.debug:
+                    log("[SERIAL] Ouvert ✅")
+                return
+            except Exception as e:
+                log(f"[SERIAL] Échec ouverture ({e}); retry dans {self.open_retry_sec}s...")
+                time.sleep(self.open_retry_sec)
 
-def init_mqtt():
-    client = mqtt.Client()
-    client.username_pw_set(MQTT_USER, MQTT_PASS)
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    def close(self):
+        with self.lock:
+            if self.ser:
+                try:
+                    self.ser.close()
+                except Exception:
+                    pass
+                self.ser = None
+
+    def query(self, cmd: bytes):
+        """Envoie une commande et lit jusqu'au CR. None si pas de réponse"""
+        with self.lock:
+            if not self.ser or not self.ser.is_open:
+                return None
+            try:
+                try:
+                    self.ser.reset_input_buffer()
+                    self.ser.reset_output_buffer()
+                except Exception:
+                    pass
+
+                self.ser.write(cmd)
+                self.ser.flush()
+                time.sleep(0.15)
+                resp = self.ser.read_until(b"\r")
+                return resp if resp else None
+            except serial.SerialException as e:
+                log(f"[SERIAL] SerialException: {e}")
+                return None
+            except Exception as e:
+                log(f"[SERIAL] Exception: {e}")
+                return None
+
+def is_valid_qpgs(resp: bytes) -> bool:
+    return bool(resp and resp.startswith(b"(") and resp.endswith(b"\r"))
+
+def parse_qpgs(resp: bytes) -> dict:
+    txt = resp.strip().decode(errors="ignore")
+    data = {"raw": txt}
+    return data
+
+def mqtt_client(host, port, user, password, client_id="wks-monitor"):
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id, clean_session=True)
+    if user:
+        client.username_pw_set(user, password)
+    client.connect(host, port, keepalive=30)
     client.loop_start()
     return client
 
-
 def main():
-    log(f"🚀 Lancement du lecteur WKS - rafraîchissement {REFRESH_INTERVAL}s (auto-ajustable)")
-    mqtt_client = init_mqtt()
-    current_interval = REFRESH_INTERVAL
-    consecutive_errors = 0
+    if not OPTIONS_PATH.exists():
+        log("❌ /data/options.json introuvable")
+        sys.exit(1)
+
+    opt = load_options()
+    port = opt.get("port")
+    baudrate = int(opt.get("baudrate", 2400))
+    inverter_count = int(opt.get("inverter_count", 3))
+    poll_interval = float(opt.get("poll_interval", 2.0))
+    debug = bool(opt.get("debug", False))
+    read_timeout = float(opt.get("read_timeout", 2.5))
+    open_retry_sec = int(opt.get("open_retry_sec", 3))
+    max_consecutive_fail = int(opt.get("max_consecutive_fail", 10))
+
+    mqtt_host = opt.get("mqtt_host", "core-mosquitto.local.hass.io")
+    mqtt_port = int(opt.get("mqtt_port", 1883))
+    mqtt_user = opt.get("mqtt_user", "")
+    mqtt_pass = opt.get("mqtt_password", "")
+    topic_prefix = opt.get("mqtt_topic_prefix", "wks")
+
+    log(f"[BOOT] 🚀 Lancement du lecteur WKS - rafraîchissement {poll_interval}s")
+    log(f"[BOOT] Port: {port} | Baud: {baudrate} | Onduleurs: {inverter_count}")
+
+    sr = SerialReader(port, baudrate, read_timeout, open_retry_sec=open_retry_sec, debug=debug)
+    sr.open()
+
+    client = mqtt_client(mqtt_host, mqtt_port, mqtt_user, mqtt_pass)
+
+    consecutive_fail = 0
 
     while True:
-        try:
-            with serial.Serial(PORT, BAUD, timeout=TIMEOUT) as ser:
-                for n in INDEXES:
-                    resp = send_cmd(ser, f"QPGS{n}")
-                    if resp and "NAK" not in resp and "00000000000000" not in resp:
-                        parsed = parse_qpgs(n, resp)
-                        publish_data(mqtt_client, f"{MQTT_TOPIC_BASE}/{n}/status", parsed)
-                        log(f"✅ QPGS{n} OK")
-                        consecutive_errors = 0
-                    else:
-                        log(f"⚠️ Aucune réponse ou trame invalide pour QPGS{n}")
-                        consecutive_errors += 1
+        any_ok = False
+        for idx in range(inverter_count):
+            cmd = f"QPGS{idx}\r".encode()
+            resp = sr.query(cmd)
 
-            if consecutive_errors >= 3:
-                current_interval = 3
-                log("⚠️ Communication instable, passage temporaire à 3s")
+            if not resp or not is_valid_qpgs(resp):
+                log(f"[WARN] ⚠️ Aucune réponse ou trame invalide pour QPGS{idx}")
+                consecutive_fail += 1
+                continue
+
+            try:
+                data = parse_qpgs(resp)
+                topic = f"{topic_prefix}/{idx}/status"
+                client.publish(topic, json.dumps(data), qos=0, retain=True)
+                if debug:
+                    log(f"[OK] QPGS{idx} → publish {topic}")
+                any_ok = True
+            except Exception as e:
+                log(f"[PARSER] Erreur parse QPGS{idx}: {e}")
+                consecutive_fail += 1
+
+            time.sleep(0.05)
+
+        if not any_ok:
+            if consecutive_fail >= max_consecutive_fail:
+                log("[HEAL] Trop d'échecs consécutifs — on referme/réouvre le port proprement")
+                sr.close()
+                time.sleep(1.0)
+                sr.open()
+                consecutive_fail = 0
             else:
-                current_interval = REFRESH_INTERVAL
-
-        except Exception as e:
-            log(f"❌ Erreur série : {e}")
-            consecutive_errors += 1
-            current_interval = 3
-
-        log(f"⏳ Pause {current_interval}s...\n")
-        time.sleep(current_interval)
-
+                if poll_interval < 3.0:
+                    log("⚠️ Communication instable, passage temporaire à 3s")
+                    time.sleep(3.0)
+                else:
+                    time.sleep(poll_interval)
+        else:
+            consecutive_fail = 0
+            time.sleep(poll_interval)
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        log("🛑 Arrêt manuel du script.")
+        log("🛑 Arrêt demandé")
         sys.exit(0)
+    except Exception as e:
+        log(f"❌ Crash: {e}")
+        time.sleep(1)
+        sys.exit(1)
