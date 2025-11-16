@@ -138,28 +138,32 @@ def main():
     sr = SerialReader(port, baudrate, read_timeout, open_retry_sec=open_retry_sec, debug=debug)
     sr.open()
 
-    client = mqtt_client(mqtt_host, mqtt_port, mqtt_user, mqtt_pass)
+    # Connexion MQTT avec gestion d'erreur
+    try:
+        client = mqtt_client(mqtt_host, mqtt_port, mqtt_user, mqtt_pass)
+        log("[MQTT] ✅ Connecté")
+    except Exception as e:
+        log(f"[MQTT] ❌ Échec connexion: {e}")
+        sys.exit(1)
 
     consecutive_fail = 0
 
-while True:
-    any_ok = False
-    for idx in range(inverter_count):
-        # Construction QPGSx + CRC + CR
-        base_cmd = f"QPGS{idx}".encode()
+    while True:
+        any_ok = False
+        for idx in range(inverter_count):
+            # Construction QPGSx + CRC + CR
+            base_cmd = f"QPGS{idx}".encode()
 
-        if idx in CRC_QPGS:
-            hi, lo = CRC_QPGS[idx]
-            cmd = base_cmd + bytes([hi, lo]) + b"\r"
-        else:
-            # Sécurité : si jamais inverter_count > 3
-            cmd = base_cmd + b"\r"
+            if idx in CRC_QPGS:
+                hi, lo = CRC_QPGS[idx]
+                cmd = base_cmd + bytes([hi, lo]) + b"\r"
+            else:
+                # Sécurité : si jamais inverter_count > 3
+                cmd = base_cmd + b"\r"
 
-        resp = sr.query(cmd)
-        ...
+            resp = sr.query(cmd)
 
-
-        if not resp or not is_valid_qpgs(resp):
+            if not resp or not is_valid_qpgs(resp):
                 log(f"[WARN] ⚠️ Aucune réponse ou trame invalide pour QPGS{idx}")
                 consecutive_fail += 1
                 continue
@@ -177,21 +181,21 @@ while True:
 
             time.sleep(0.05)
 
-        if not any_ok:
-            if consecutive_fail >= max_consecutive_fail:
-                log("[HEAL] Trop d'échecs consécutifs — on referme/réouvre le port proprement")
-                sr.close()
-                time.sleep(1.0)
-                sr.open()
-                consecutive_fail = 0
-            else:
-                if poll_interval < 3.0:
-                    log("⚠️ Communication instable, passage temporaire à 3s")
-                    time.sleep(3.0)
-                else:
-                    time.sleep(poll_interval)
-        else:
+        # Gestion des échecs consécutifs
+        if any_ok:
             consecutive_fail = 0
+        elif consecutive_fail >= max_consecutive_fail:
+            log("[HEAL] Trop d'échecs consécutifs — on referme/réouvre le port proprement")
+            sr.close()
+            time.sleep(1.0)
+            sr.open()
+            consecutive_fail = 0
+
+        # Délai avant prochain cycle
+        if not any_ok and poll_interval < 3.0:
+            log("⚠️ Communication instable, passage temporaire à 3s")
+            time.sleep(3.0)
+        else:
             time.sleep(poll_interval)
 
 if __name__ == "__main__":
