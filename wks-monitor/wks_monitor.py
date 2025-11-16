@@ -159,7 +159,7 @@ while True:
         ...
 
 
-            if not resp or not is_valid_qpgs(resp):
+        if not resp or not is_valid_qpgs(resp):
                 log(f"[WARN] ⚠️ Aucune réponse ou trame invalide pour QPGS{idx}")
                 consecutive_fail += 1
                 continue
