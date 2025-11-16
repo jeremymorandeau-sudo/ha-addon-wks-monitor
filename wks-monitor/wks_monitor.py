@@ -99,9 +99,105 @@ def is_valid_qpgs(resp: bytes) -> bool:
     return resp.startswith(b"(") and resp.endswith(b"\r")
 
 def parse_qpgs(resp: bytes) -> dict:
-    txt = resp.strip().decode(errors="ignore")
-    data = {"raw": txt}
-    return data
+    """
+    Parse une trame QPGS des onduleurs WKS/Voltronic en parallèle.
+    
+    Format typique (20+ champs séparés par espaces):
+    (230.5 50.0 230.5 50.0 1200 1200 015 54.2 12.5 075 385.0 012.5 045 350 045 00010110 1 3 000 010<CR>
+    
+    Retourne un dict avec tous les champs parsés + la trame brute.
+    """
+    try:
+        # Décodage et nettoyage
+        txt = resp.strip().decode(errors="ignore")
+        
+        # Suppression des parenthèses et CR
+        if txt.startswith("("):
+            txt = txt[1:]
+        if txt.endswith("\r"):
+            txt = txt[:-1]
+        
+        # Split par espaces
+        fields = txt.split()
+        
+        # Vérification du nombre minimal de champs
+        if len(fields) < 18:
+            log(f"[PARSER] Trame trop courte: {len(fields)} champs (attendu >= 18)")
+            return {"raw": txt, "error": "incomplete_frame"}
+        
+        # Parsing des champs individuels
+        data = {
+            "raw": txt,
+            
+            # Champs 0-1: Sortie AC (phase 1)
+            "ac_output_voltage": float(fields[0]),
+            "ac_output_freq": float(fields[1]),
+            
+            # Champs 2-3: Sortie AC (dupliqué, on ignore)
+            
+            # Champs 4-6: Puissance et charge
+            "output_apparent_power_va": int(fields[4]),
+            "output_active_power_w": int(fields[5]),
+            "output_load_pct": int(fields[6]),
+            
+            # Champs 7-9: Batterie
+            "battery_voltage": float(fields[7]),
+            "battery_charge_current_a": float(fields[8]),
+            "battery_capacity_pct": int(fields[9]),
+            
+            # Champs 10-11: PV (solaire)
+            "pv_input_voltage": float(fields[10]),
+            "pv_input_current_a": float(fields[11]),
+            
+            # Champ 12: Température dissipateur
+            "heatsink_temp": int(fields[12]),
+            
+            # Champ 13: Bus DC
+            "dc_bus_voltage": int(fields[13]),
+            
+            # Champ 14: Température batterie
+            "battery_temp_c": int(fields[14]),
+            
+            # Champ 15: Flags d'état (8 bits binaires)
+            "status_flags_raw": fields[15],
+            
+            # Champ 16: Rôle dans le parallèle (0=standalone, 1=master, 2=slave)
+            "parallel_role": int(fields[16]),
+            
+            # Champ 17: Nombre total d'unités en parallèle
+            "total_units": int(fields[17]),
+        }
+        
+        # Décodage des flags d'état (champ 15)
+        # Format: 8 caractères binaires (0 ou 1)
+        # Exemple: "00010110"
+        flags_str = fields[15]
+        if len(flags_str) >= 8:
+            data["status_flags"] = {
+                "inverter_output": bool(int(flags_str[0])),      # Bit 0: Sortie onduleur active
+                "pv_charging": bool(int(flags_str[1])),          # Bit 1: Charge PV active
+                "ac_charging": bool(int(flags_str[2])),          # Bit 2: Charge secteur active
+                "load_on_battery": bool(int(flags_str[3])),      # Bit 3: Charge sur batterie
+                "fault": bool(int(flags_str[4])),                # Bit 4: Défaut/erreur
+                "line_mode": bool(int(flags_str[5])),            # Bit 5: Mode ligne (vs batterie)
+                "test_mode": bool(int(flags_str[6])),            # Bit 6: Mode test
+                "silence_buzzer": bool(int(flags_str[7])),       # Bit 7: Buzzer désactivé
+            }
+        
+        # Ajout de champs calculés utiles
+        data["pv_input_power_w"] = round(data["pv_input_voltage"] * data["pv_input_current_a"], 1)
+        data["battery_charge_power_w"] = round(data["battery_voltage"] * data["battery_charge_current_a"], 1)
+        
+        return data
+        
+    except (ValueError, IndexError) as e:
+        log(f"[PARSER] Erreur parsing: {e}")
+        # En cas d'erreur, on retourne au moins la trame brute
+        txt = resp.strip().decode(errors="ignore")
+        return {
+            "raw": txt,
+            "error": str(e)
+        }
 
 def mqtt_client(host, port, user, password, client_id="wks-monitor"):
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id, clean_session=True)
@@ -170,11 +266,25 @@ def main():
 
             try:
                 data = parse_qpgs(resp)
+                
+                # Vérification qu'on a bien des données valides
+                if "error" in data:
+                    log(f"[WARN] ⚠️ Erreur parsing QPGS{idx}: {data['error']}")
+                    consecutive_fail += 1
+                    continue
+                
                 topic = f"{topic_prefix}/{idx}/status"
                 client.publish(topic, json.dumps(data), qos=0, retain=True)
+                
                 if debug:
+                    log(f"[OK] QPGS{idx} → {data.get('output_active_power_w', 0)}W, "
+                        f"Batt: {data.get('battery_voltage', 0)}V, "
+                        f"PV: {data.get('pv_input_voltage', 0)}V")
+                else:
                     log(f"[OK] QPGS{idx} → publish {topic}")
+                
                 any_ok = True
+                
             except Exception as e:
                 log(f"[PARSER] Erreur parse QPGS{idx}: {e}")
                 consecutive_fail += 1
