@@ -1,5 +1,5 @@
 name: "WKS Monitor"
-version: "2.0.7"
+version: "2.0.8"
 slug: "wks_monitor"
 description: "Lecture fiable des onduleurs WKS/Voltronic (QPGS0–2) + MQTT — gestion série robuste"
 arch:
