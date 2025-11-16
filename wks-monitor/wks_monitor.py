@@ -9,6 +9,12 @@ import paho.mqtt.client as mqtt
 import serial
 
 OPTIONS_PATH = Path("/data/options.json")
+# CRC pré-calculés pour les commandes QPGS0/1/2 (MKS I 5kVA à 2400 bauds)
+CRC_QPGS = {
+    0: (0x3F, 0xDA),  # QPGS0
+    1: (0x2F, 0xFB),  # QPGS1
+    2: (0x1F, 0x98),  # QPGS2
+}
 
 def log(msg):
     print(msg, flush=True)
@@ -84,7 +90,13 @@ class SerialReader:
                 return None
 
 def is_valid_qpgs(resp: bytes) -> bool:
-    return bool(resp and resp.startswith(b"(") and resp.endswith(b"\r"))
+    if not resp:
+        return False
+    # On ignore les NAK
+    if resp.startswith(b"(NAK"):
+        return False
+    # Trame WKS classique : commence par "(" et finit par CR
+    return resp.startswith(b"(") and resp.endswith(b"\r")
 
 def parse_qpgs(resp: bytes) -> dict:
     txt = resp.strip().decode(errors="ignore")
@@ -130,11 +142,22 @@ def main():
 
     consecutive_fail = 0
 
-    while True:
-        any_ok = False
-        for idx in range(inverter_count):
-            cmd = f"QPGS{idx}\r".encode()
-            resp = sr.query(cmd)
+while True:
+    any_ok = False
+    for idx in range(inverter_count):
+        # Construction QPGSx + CRC + CR
+        base_cmd = f"QPGS{idx}".encode()
+
+        if idx in CRC_QPGS:
+            hi, lo = CRC_QPGS[idx]
+            cmd = base_cmd + bytes([hi, lo]) + b"\r"
+        else:
+            # Sécurité : si jamais inverter_count > 3
+            cmd = base_cmd + b"\r"
+
+        resp = sr.query(cmd)
+        ...
+
 
             if not resp or not is_valid_qpgs(resp):
                 log(f"[WARN] ⚠️ Aucune réponse ou trame invalide pour QPGS{idx}")
