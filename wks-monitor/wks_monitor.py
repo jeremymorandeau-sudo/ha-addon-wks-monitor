@@ -125,6 +125,10 @@ def parse_qpgs(resp: bytes) -> dict:
             log(f"[PARSER] Trame trop courte: {len(fields)} champs (attendu >= 18)")
             return {"raw": txt, "error": "incomplete_frame"}
         
+        # Helper function: convertir en int même si le format est "000.0"
+        def safe_int(val):
+            return int(float(val))
+        
         # Parsing des champs individuels
         data = {
             "raw": txt,
@@ -136,36 +140,36 @@ def parse_qpgs(resp: bytes) -> dict:
             # Champs 2-3: Sortie AC (dupliqué, on ignore)
             
             # Champs 4-6: Puissance et charge
-            "output_apparent_power_va": int(fields[4]),
-            "output_active_power_w": int(fields[5]),
-            "output_load_pct": int(fields[6]),
+            "output_apparent_power_va": safe_int(fields[4]),
+            "output_active_power_w": safe_int(fields[5]),
+            "output_load_pct": safe_int(fields[6]),
             
             # Champs 7-9: Batterie
             "battery_voltage": float(fields[7]),
             "battery_charge_current_a": float(fields[8]),
-            "battery_capacity_pct": int(fields[9]),
+            "battery_capacity_pct": safe_int(fields[9]),
             
             # Champs 10-11: PV (solaire)
             "pv_input_voltage": float(fields[10]),
             "pv_input_current_a": float(fields[11]),
             
             # Champ 12: Température dissipateur
-            "heatsink_temp": int(fields[12]),
+            "heatsink_temp": safe_int(fields[12]),
             
             # Champ 13: Bus DC
-            "dc_bus_voltage": int(fields[13]),
+            "dc_bus_voltage": safe_int(fields[13]),
             
             # Champ 14: Température batterie
-            "battery_temp_c": int(fields[14]),
+            "battery_temp_c": safe_int(fields[14]),
             
             # Champ 15: Flags d'état (8 bits binaires)
             "status_flags_raw": fields[15],
             
             # Champ 16: Rôle dans le parallèle (0=standalone, 1=master, 2=slave)
-            "parallel_role": int(fields[16]),
+            "parallel_role": safe_int(fields[16]),
             
             # Champ 17: Nombre total d'unités en parallèle
-            "total_units": int(fields[17]),
+            "total_units": safe_int(fields[17]),
         }
         
         # Décodage des flags d'état (champ 15)
