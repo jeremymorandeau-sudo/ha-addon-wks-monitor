@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-WKS Monitor v4.0.0 - Complete Edition
-Couvre 100% des 232 capteurs YAML Home Assistant
-Ajouts v4: EnergyTracker, StatisticsTracker, InfoTracker
+WKS Monitor v4.0.1 - Fix QPIWS
+Correction: QPIWS maintenant publié correctement
 """
 
 import json
@@ -20,7 +19,6 @@ import serial
 OPTIONS_PATH = Path("/data/options.json")
 PERSISTENT_DATA_PATH = Path("/data/wks_persistent.json")
 
-# CRC pré-calculés pour les commandes principales
 CRC_TABLE = {
     "QPGS0": (0x3F, 0xDA),
     "QPGS1": (0x2F, 0xFB),
@@ -40,7 +38,6 @@ def load_options() -> dict:
         return json.load(f)
 
 def calculate_crc(cmd: bytes) -> bytes:
-    """Calcul CRC Voltronic si pas dans la table"""
     crc = 0
     for byte in cmd:
         crc = crc ^ byte
@@ -95,7 +92,6 @@ class SerialReader:
                 self.ser = None
 
     def query(self, cmd: str) -> Optional[bytes]:
-        """Envoie une commande et lit la réponse"""
         with self.lock:
             if not self.ser or not self.ser.is_open:
                 return None
@@ -125,8 +121,6 @@ class SerialReader:
                 return None
 
 class VoltronicParser:
-    """Parser pour toutes les commandes Voltronic"""
-    
     @staticmethod
     def safe_int(val: str) -> int:
         try:
@@ -143,7 +137,6 @@ class VoltronicParser:
     
     @staticmethod
     def parse_qpgs(resp: bytes) -> Dict[str, Any]:
-        """Parse QPGS - Status parallèle (27 champs)"""
         try:
             txt = resp.strip().decode(errors="ignore").split('\r')[0]
             if txt.startswith("("):
@@ -213,7 +206,6 @@ class VoltronicParser:
     
     @staticmethod
     def parse_qpigs(resp: bytes) -> Dict[str, Any]:
-        """Parse QPIGS - General Status"""
         try:
             txt = resp.strip().decode(errors="ignore").split('\r')[0]
             if txt.startswith("("):
@@ -266,7 +258,6 @@ class VoltronicParser:
     
     @staticmethod
     def parse_qpiri(resp: bytes) -> Dict[str, Any]:
-        """Parse QPIRI - Rating Information"""
         try:
             txt = resp.strip().decode(errors="ignore").split('\r')[0]
             if txt.startswith("("):
@@ -311,7 +302,6 @@ class VoltronicParser:
     
     @staticmethod
     def parse_qpiws(resp: bytes) -> Dict[str, Any]:
-        """Parse QPIWS - Warning Status"""
         try:
             txt = resp.strip().decode(errors="ignore").split('\r')[0]
             if txt.startswith("("):
@@ -348,11 +338,11 @@ class VoltronicParser:
                 "mppt_overload_fault": bool(int(txt[27])),
                 "mppt_overload_warning": bool(int(txt[28])),
                 "battery_too_low_to_charge_warning": bool(int(txt[29])),
-                "overload_warning": bool(int(txt[16])),  # Alias
-                "over_temperature_warning": bool(int(txt[9])),  # Alias
-                "battery_sensor_alarm_warning": bool(int(txt[23])),  # Alias
-                "pv_input_short_warning": bool(int(txt[6])),  # Alias
-                "parallel_loss_warning": False,  # Pas dans protocole standard
+                "overload_warning": bool(int(txt[16])),
+                "over_temperature_warning": bool(int(txt[9])),
+                "battery_sensor_alarm_warning": bool(int(txt[23])),
+                "pv_input_short_warning": bool(int(txt[6])),
+                "parallel_loss_warning": False,
                 "parallel_invalid_sync_warning": False,
             }
             
@@ -367,7 +357,6 @@ class VoltronicParser:
     
     @staticmethod
     def parse_qmod(resp: bytes) -> Dict[str, Any]:
-        """Parse QMOD - Mode actuel"""
         try:
             txt = resp.strip().decode(errors="ignore").split('\r')[0]
             if txt.startswith("("):
@@ -392,7 +381,6 @@ class VoltronicParser:
 
 
 class EnergyTracker:
-    """Module de suivi énergétique avec intégration Riemann"""
     def __init__(self, inverter_count: int):
         self.inverter_count = inverter_count
         self.data = {}
@@ -417,11 +405,10 @@ class EnergyTracker:
         self._load_persistent()
     
     def update(self, idx: int, qpgs_data: dict, qpigs_data: dict = None):
-        """Mise à jour avec intégration Riemann"""
         now = datetime.now()
         dt = (now - self.last_update[idx]).total_seconds() / 3600.0
         
-        if dt > 0.1:  # Ignore si >6 min
+        if dt > 0.1:
             self.last_update[idx] = now
             return
         
@@ -433,7 +420,6 @@ class EnergyTracker:
         batt_voltage = qpgs_data.get("battery_voltage", 48.0)
         battery_power = batt_charge * batt_voltage
         
-        # Intégration trapézoïdale
         if d["_last_pv_power"] > 0 or pv_power > 0:
             energy_kwh = ((d["_last_pv_power"] + pv_power) / 2) * dt / 1000.0
             d["pv_energy_kwh"] += energy_kwh
@@ -510,7 +496,6 @@ class EnergyTracker:
 
 
 class StatisticsTracker:
-    """Module de statistiques (min/max/pics)"""
     def __init__(self, inverter_count: int, history_size: int = 1000):
         self.inverter_count = inverter_count
         self.data = {}
@@ -551,7 +536,6 @@ class StatisticsTracker:
             if qpiws_data.get("any_warning") or qpiws_data.get("any_fault"):
                 d["warnings_count_today"] += 1
                 d["last_warning_timestamp"] = datetime.now().isoformat()
-                # Trouver le premier warning actif
                 for key, val in qpiws_data.items():
                     if isinstance(val, bool) and val and ("warning" in key or "fault" in key):
                         d["last_warning_type"] = key.replace("_", " ").title()
@@ -583,7 +567,6 @@ class StatisticsTracker:
 
 
 class InfoTracker:
-    """Module d'informations système/diagnostic"""
     def __init__(self, inverter_count: int):
         self.inverter_count = inverter_count
         self.boot_time = datetime.now()
@@ -678,9 +661,10 @@ def main():
     mqtt_pass = opt.get("mqtt_password", "")
     topic_prefix = opt.get("mqtt_topic_prefix", "wks")
 
-    log(f"[BOOT] 🚀 WKS Monitor v4.0.0 - Polling {poll_interval}s")
+    log(f"[BOOT] 🚀 WKS Monitor v4.0.1 - Polling {poll_interval}s")
     log(f"[BOOT] Port: {port} @ {baudrate} | Onduleurs: {inverter_count}")
     log(f"[BOOT] Modules v4: Energy={enable_energy} Stats={enable_statistics} Info={enable_info}")
+    log(f"[BOOT] Commandes: QPGS + {'QPIGS ' if enable_qpigs else ''}{'QPIRI ' if enable_qpiri else ''}{'QPIWS ' if enable_qpiws else ''}{'QMOD ' if enable_qmod else ''}")
 
     sr = SerialReader(port, baudrate, read_timeout, open_retry_sec, debug)
     sr.open()
@@ -707,7 +691,6 @@ def main():
         any_ok = False
         iteration_count += 1
         
-        # Reset journalier
         current_date = datetime.now().date()
         if current_date > last_midnight:
             log("[DAILY] 🌅 Nouveau jour - Reset compteurs")
@@ -748,14 +731,37 @@ def main():
                         mqtt_pub.publish(f"{idx}/general", qpigs_data)
                     time.sleep(0.05)
             
-            # QPIWS
+            # QPIWS - CORRECTION: Maintenant dans la boucle !
             if enable_qpiws:
                 resp = sr.query("QPIWS")
                 if resp and len(resp) > 10:
                     qpiws_data = parser.parse_qpiws(resp)
                     if "error" not in qpiws_data:
                         mqtt_pub.publish(f"{idx}/warnings", qpiws_data)
-                    time.sleep(0.05)
+                        if debug:
+                            log(f"[QPIWS{idx}] Fault={qpiws_data.get('any_fault')} Warning={qpiws_data.get('any_warning')}")
+                    else:
+                        # Warnings par défaut si parsing échoue
+                        default_warnings = {
+                            "any_fault": False,
+                            "any_warning": False,
+                            "raw": "PARSE_ERROR"
+                        }
+                        mqtt_pub.publish(f"{idx}/warnings", default_warnings)
+                        if debug:
+                            log(f"[QPIWS{idx}] Parsing error - Default warnings published")
+                else:
+                    # Warnings par défaut si pas de réponse
+                    default_warnings = {
+                        "any_fault": False,
+                        "any_warning": False,
+                        "raw": "NO_RESPONSE"
+                    }
+                    mqtt_pub.publish(f"{idx}/warnings", default_warnings)
+                    if debug:
+                        log(f"[QPIWS{idx}] No response - Default warnings published")
+                
+                time.sleep(0.05)
             
             # QMOD
             if enable_qmod:
