@@ -114,7 +114,7 @@ class SerialReader:
                 self.ser.flush()
                 time.sleep(0.15 + extra_wait)  # Délai ajustable
                 
-                resp = ser.read_until(b"\r")
+                resp = self.ser.read_until(b"\r")
                 return resp if resp else None
                 
             except serial.SerialException as e:
