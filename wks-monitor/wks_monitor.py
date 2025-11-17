@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-WKS Monitor v4.0.1 - Fix QPIWS
-Correction: QPIWS maintenant publié correctement
+WKS Monitor v4.0.2 - QPIWS Fix + Warnings complets
+- Timeout QPIWS augmenté
+- Accepte réponses courtes
+- Debug logging amélioré
+- Tous les champs warnings publiés
 """
 
 import json
@@ -91,7 +94,8 @@ class SerialReader:
                     pass
                 self.ser = None
 
-    def query(self, cmd: str) -> Optional[bytes]:
+    def query(self, cmd: str, extra_wait: float = 0.0) -> Optional[bytes]:
+        """Envoie une commande et lit la réponse"""
         with self.lock:
             if not self.ser or not self.ser.is_open:
                 return None
@@ -108,9 +112,9 @@ class SerialReader:
                 self.ser.reset_output_buffer()
                 self.ser.write(full_cmd)
                 self.ser.flush()
-                time.sleep(0.15)
+                time.sleep(0.15 + extra_wait)  # Délai ajustable
                 
-                resp = self.ser.read_until(b"\r")
+                resp = ser.read_until(b"\r")
                 return resp if resp else None
                 
             except serial.SerialException as e:
@@ -308,7 +312,7 @@ class VoltronicParser:
                 txt = txt[1:]
             
             if len(txt) < 32:
-                return {"raw": txt, "error": "incomplete_qpiws"}
+                return {"raw": txt, "error": f"incomplete_qpiws_len_{len(txt)}"}
             
             warnings = {
                 "inverter_fault": bool(int(txt[1])),
@@ -661,7 +665,7 @@ def main():
     mqtt_pass = opt.get("mqtt_password", "")
     topic_prefix = opt.get("mqtt_topic_prefix", "wks")
 
-    log(f"[BOOT] 🚀 WKS Monitor v4.0.1 - Polling {poll_interval}s")
+    log(f"[BOOT] 🚀 WKS Monitor v4.0.2 - Polling {poll_interval}s")
     log(f"[BOOT] Port: {port} @ {baudrate} | Onduleurs: {inverter_count}")
     log(f"[BOOT] Modules v4: Energy={enable_energy} Stats={enable_statistics} Info={enable_info}")
     log(f"[BOOT] Commandes: QPGS + {'QPIGS ' if enable_qpigs else ''}{'QPIRI ' if enable_qpiri else ''}{'QPIWS ' if enable_qpiws else ''}{'QMOD ' if enable_qmod else ''}")
@@ -731,35 +735,74 @@ def main():
                         mqtt_pub.publish(f"{idx}/general", qpigs_data)
                     time.sleep(0.05)
             
-            # QPIWS - CORRECTION: Maintenant dans la boucle !
+            # QPIWS - v4.0.2 FIX: Timeout augmenté + tous les champs par défaut
             if enable_qpiws:
-                resp = sr.query("QPIWS")
-                if resp and len(resp) > 10:
+                # Warnings par défaut COMPLETS
+                default_warnings = {
+                    "any_fault": False,
+                    "any_warning": False,
+                    "inverter_fault": False,
+                    "bus_over_fault": False,
+                    "bus_under_fault": False,
+                    "bus_soft_fail_fault": False,
+                    "line_fail_warning": False,
+                    "opv_short_warning": False,
+                    "inverter_voltage_too_low_fault": False,
+                    "inverter_voltage_too_high_fault": False,
+                    "over_temperature_fault": False,
+                    "over_temperature_warning": False,
+                    "fan_locked_warning": False,
+                    "battery_voltage_high_warning": False,
+                    "battery_low_alarm_warning": False,
+                    "battery_under_shutdown_warning": False,
+                    "battery_sensor_alarm_warning": False,
+                    "overload_fault": False,
+                    "overload_warning": False,
+                    "eeprom_fault": False,
+                    "inverter_over_current_fault": False,
+                    "inverter_soft_fail_fault": False,
+                    "self_test_fail_warning": False,
+                    "op_dc_voltage_over_warning": False,
+                    "battery_open_warning": False,
+                    "current_sensor_fail_warning": False,
+                    "bat_short_warning": False,
+                    "power_limit_warning": False,
+                    "pv_voltage_high_warning": False,
+                    "pv_input_short_warning": False,
+                    "mppt_overload_fault": False,
+                    "mppt_overload_warning": False,
+                    "battery_too_low_to_charge_warning": False,
+                    "parallel_loss_warning": False,
+                    "parallel_invalid_sync_warning": False,
+                    "raw": "NO_RESPONSE"
+                }
+                
+                resp = sr.query("QPIWS", extra_wait=0.15)  # Timeout augmenté!
+                
+                # DEBUG: Afficher réponse brute en mode debug
+                if debug and iteration_count <= 3:
+                    if resp:
+                        log(f"[DEBUG-QPIWS{idx}] Réponse: {resp.hex()} | ASCII: {resp} | Len: {len(resp)}")
+                    else:
+                        log(f"[DEBUG-QPIWS{idx}] Aucune réponse")
+                
+                if resp and len(resp) >= 3:  # Accept réponses courtes (NAK = 4 octets)
                     qpiws_data = parser.parse_qpiws(resp)
                     if "error" not in qpiws_data:
+                        # QPIWS fonctionne!
                         mqtt_pub.publish(f"{idx}/warnings", qpiws_data)
                         if debug:
-                            log(f"[QPIWS{idx}] Fault={qpiws_data.get('any_fault')} Warning={qpiws_data.get('any_warning')}")
+                            log(f"[QPIWS{idx}] ✅ Fault={qpiws_data.get('any_fault')} Warning={qpiws_data.get('any_warning')}")
                     else:
-                        # Warnings par défaut si parsing échoue
-                        default_warnings = {
-                            "any_fault": False,
-                            "any_warning": False,
-                            "raw": "PARSE_ERROR"
-                        }
+                        # Parse error → warnings par défaut
                         mqtt_pub.publish(f"{idx}/warnings", default_warnings)
-                        if debug:
-                            log(f"[QPIWS{idx}] Parsing error - Default warnings published")
+                        if debug and iteration_count <= 3:
+                            log(f"[QPIWS{idx}] ⚠️ Parse error: {qpiws_data.get('error')} - Using defaults")
                 else:
-                    # Warnings par défaut si pas de réponse
-                    default_warnings = {
-                        "any_fault": False,
-                        "any_warning": False,
-                        "raw": "NO_RESPONSE"
-                    }
+                    # Pas de réponse → warnings par défaut
                     mqtt_pub.publish(f"{idx}/warnings", default_warnings)
-                    if debug:
-                        log(f"[QPIWS{idx}] No response - Default warnings published")
+                    if debug and iteration_count <= 3:
+                        log(f"[QPIWS{idx}] ⚠️ No response - Using defaults")
                 
                 time.sleep(0.05)
             
