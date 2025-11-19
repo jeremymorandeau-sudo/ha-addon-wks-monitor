@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-WKS Monitor v4.2.1 - Version avec CRC corrigés
-- CRC corrigés pour QVFW, QVFW2, QGMN, QPI
-- Correction parsing battery_discharge_current (dernier champ QPGS)
-- Ajout commandes QVFW, QVFW2, QGMN pour versions firmware
-- Option enable_firmware_query configurable
+WKS Monitor v4.3.0 - Version stable avec CRC originaux
+- CRC originaux qui fonctionnent pour QPGS, QPIGS, QPIRI
+- Option enable_firmware_query désactivable
+- Correction parsing battery_discharge_current
+- Note: QVFW/QVFW2/QGMN/QPI/QPIWS/QMOD non supportés par certains onduleurs WKS
 """
 
 import json
@@ -13,7 +13,7 @@ import time
 import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import deque
 
 import paho.mqtt.client as mqtt
@@ -22,19 +22,19 @@ import serial
 OPTIONS_PATH = Path("/data/options.json")
 PERSISTENT_DATA_PATH = Path("/data/wks_persistent.json")
 
-# CRC recalculés correctement
+# CRC originaux qui fonctionnent
 CRC_TABLE = {
-    "QPGS0": (0x3D, 0x60),
-    "QPGS1": (0xFD, 0xA1),
-    "QPGS2": (0xFC, 0xE1),
-    "QPIGS": (0xD7, 0x4E),
-    "QPIRI": (0x8C, 0xC1),
-    "QPIWS": (0x17, 0x43),
-    "QMOD": (0xE8, 0xB4),
-    "QPI": (0x27, 0xAC),
-    "QVFW": (0x72, 0x83),
-    "QVFW2": (0x74, 0xB2),
-    "QGMN": (0x8D, 0x15),
+    "QPGS0": (0x3F, 0xDA),
+    "QPGS1": (0x2F, 0xFB),
+    "QPGS2": (0x1F, 0x98),
+    "QPIGS": (0xB7, 0xA9),
+    "QPIRI": (0xF8, 0x54),
+    "QPIWS": (0xB4, 0xDA),
+    "QMOD": (0x49, 0xC1),
+    "QPI": (0xBE, 0xAC),
+    "QVFW": (0x62, 0x99),
+    "QVFW2": (0xC3, 0xF5),
+    "QGMN": (0x49, 0x28),
 }
 
 def log(msg: str):
@@ -45,14 +45,16 @@ def load_options() -> dict:
         return json.load(f)
 
 def calculate_crc(cmd: bytes) -> bytes:
+    """CRC XMODEM"""
     crc = 0
     for byte in cmd:
-        crc = crc ^ byte
+        crc = crc ^ (byte << 8)
         for _ in range(8):
-            if crc & 1:
-                crc = (crc >> 1) ^ 0xA001
+            if crc & 0x8000:
+                crc = (crc << 1) ^ 0x1021
             else:
-                crc = crc >> 1
+                crc = crc << 1
+        crc = crc & 0xFFFF
     return bytes([crc >> 8, crc & 0xFF])
 
 class SerialReader:
@@ -72,14 +74,9 @@ class SerialReader:
                 if self.debug:
                     log(f"[SERIAL] Ouverture {self.port} @ {self.baudrate} 8N1")
                 self.ser = serial.Serial(
-                    self.port,
-                    baudrate=self.baudrate,
-                    bytesize=8,
-                    parity=serial.PARITY_NONE,
-                    stopbits=1,
-                    timeout=self.timeout,
-                    write_timeout=self.timeout,
-                    exclusive=True
+                    self.port, baudrate=self.baudrate, bytesize=8,
+                    parity=serial.PARITY_NONE, stopbits=1,
+                    timeout=self.timeout, write_timeout=self.timeout, exclusive=True
                 )
                 time.sleep(1.0)
                 if self.debug:
@@ -94,12 +91,11 @@ class SerialReader:
             if self.ser:
                 try:
                     self.ser.close()
-                except Exception:
+                except:
                     pass
                 self.ser = None
 
     def query(self, cmd: str, extra_wait: float = 0.0) -> Optional[bytes]:
-        """Envoie une commande et lit la réponse"""
         with self.lock:
             if not self.ser or not self.ser.is_open:
                 return None
@@ -118,12 +114,7 @@ class SerialReader:
                 self.ser.flush()
                 time.sleep(0.15 + extra_wait)
                 
-                resp = self.ser.read_until(b"\r")
-                return resp if resp else None
-                
-            except serial.SerialException as e:
-                log(f"[SERIAL] Exception: {e}")
-                return None
+                return self.ser.read_until(b"\r") or None
             except Exception as e:
                 log(f"[SERIAL] Erreur: {e}")
                 return None
@@ -132,7 +123,6 @@ class VoltronicParser:
     @staticmethod
     def safe_int(val: str) -> int:
         try:
-            # Nettoyer la valeur - garder seulement les chiffres
             cleaned = ''.join(c for c in val if c.isdigit())
             return int(cleaned) if cleaned else 0
         except:
@@ -141,7 +131,6 @@ class VoltronicParser:
     @staticmethod
     def safe_float(val: str) -> float:
         try:
-            # Nettoyer la valeur - garder chiffres et point
             cleaned = ''.join(c for c in val if c.isdigit() or c == '.')
             return float(cleaned) if cleaned else 0.0
         except:
@@ -149,10 +138,6 @@ class VoltronicParser:
     
     @staticmethod
     def parse_qpgs(resp: bytes) -> Dict[str, Any]:
-        """
-        Parse QPGSn response - Parallel Information inquiry
-        Format selon protocole Voltronic section 2.8
-        """
         try:
             txt = resp.strip().decode(errors="ignore").split('\r')[0]
             if txt.startswith("("):
@@ -168,25 +153,24 @@ class VoltronicParser:
                 "serial_number": fields[1] if len(fields) > 1 else "",
                 "work_mode": fields[2] if len(fields) > 2 else "",
                 "fault_code": fields[3] if len(fields) > 3 else "00",
-                "grid_voltage": VoltronicParser.safe_float(fields[4]) if len(fields) > 4 else 0.0,
-                "grid_freq": VoltronicParser.safe_float(fields[5]) if len(fields) > 5 else 0.0,
-                "ac_output_voltage": VoltronicParser.safe_float(fields[6]) if len(fields) > 6 else 0.0,
-                "ac_output_freq": VoltronicParser.safe_float(fields[7]) if len(fields) > 7 else 0.0,
-                "output_apparent_power_va": VoltronicParser.safe_int(fields[8]) if len(fields) > 8 else 0,
-                "output_active_power_w": VoltronicParser.safe_int(fields[9]) if len(fields) > 9 else 0,
-                "output_load_pct": VoltronicParser.safe_int(fields[10]) if len(fields) > 10 else 0,
-                "battery_voltage": VoltronicParser.safe_float(fields[11]) if len(fields) > 11 else 0.0,
-                "battery_charge_current_a": VoltronicParser.safe_int(fields[12]) if len(fields) > 12 else 0,
-                "battery_capacity_pct": VoltronicParser.safe_int(fields[13]) if len(fields) > 13 else 0,
-                "pv_input_voltage": VoltronicParser.safe_float(fields[14]) if len(fields) > 14 else 0.0,
-                "total_charge_current_a": VoltronicParser.safe_int(fields[15]) if len(fields) > 15 else 0,
-                "total_apparent_power_va": VoltronicParser.safe_int(fields[16]) if len(fields) > 16 else 0,
-                "total_active_power_w": VoltronicParser.safe_int(fields[17]) if len(fields) > 17 else 0,
-                "total_load_pct": VoltronicParser.safe_int(fields[18]) if len(fields) > 18 else 0,
+                "grid_voltage": VoltronicParser.safe_float(fields[4]),
+                "grid_freq": VoltronicParser.safe_float(fields[5]),
+                "ac_output_voltage": VoltronicParser.safe_float(fields[6]),
+                "ac_output_freq": VoltronicParser.safe_float(fields[7]),
+                "output_apparent_power_va": VoltronicParser.safe_int(fields[8]),
+                "output_active_power_w": VoltronicParser.safe_int(fields[9]),
+                "output_load_pct": VoltronicParser.safe_int(fields[10]),
+                "battery_voltage": VoltronicParser.safe_float(fields[11]),
+                "battery_charge_current_a": VoltronicParser.safe_int(fields[12]),
+                "battery_capacity_pct": VoltronicParser.safe_int(fields[13]),
+                "pv_input_voltage": VoltronicParser.safe_float(fields[14]),
+                "total_charge_current_a": VoltronicParser.safe_int(fields[15]),
+                "total_apparent_power_va": VoltronicParser.safe_int(fields[16]),
+                "total_active_power_w": VoltronicParser.safe_int(fields[17]),
+                "total_load_pct": VoltronicParser.safe_int(fields[18]),
                 "status_flags_raw": fields[19] if len(fields) > 19 else "00000000",
             }
             
-            # Champs additionnels selon protocole QPGSn (section 2.8)
             if len(fields) > 20:
                 data["output_mode"] = VoltronicParser.safe_int(fields[20])
             if len(fields) > 21:
@@ -200,40 +184,35 @@ class VoltronicParser:
             if len(fields) > 25:
                 data["pv_input_current_a"] = VoltronicParser.safe_int(fields[25])
             if len(fields) > 26:
-                # Correction: nettoyer le dernier champ qui peut contenir des caractères CRC
+                # Correction: nettoyer le dernier champ (peut contenir CRC)
                 last_field = fields[26]
-                # Extraire seulement les 3 premiers caractères numériques
                 cleaned = ''.join(c for c in last_field[:3] if c.isdigit())
                 data["battery_discharge_current_a"] = int(cleaned) if cleaned else 0
             
-            # Parse status flags selon protocole (b7b6b5b4b3b2b1b0)
             flags = data["status_flags_raw"]
             if len(flags) >= 8:
                 data["status_flags"] = {
-                    "scc_ok": bool(int(flags[0])),           # b7: SCC OK
-                    "ac_charging": bool(int(flags[1])),      # b6: AC Charging
-                    "scc_charging": bool(int(flags[2])),     # b5: SCC Charging
-                    "battery_open": int(flags[3:5], 2) == 2 if len(flags) >= 5 else False,  # b4b3
+                    "scc_ok": flags[0] == '1',
+                    "ac_charging": flags[1] == '1',
+                    "scc_charging": flags[2] == '1',
+                    "battery_open": int(flags[3:5], 2) == 2 if len(flags) >= 5 else False,
                     "battery_under": int(flags[3:5], 2) == 1 if len(flags) >= 5 else False,
                     "battery_normal": int(flags[3:5], 2) == 0 if len(flags) >= 5 else True,
-                    "line_loss": bool(int(flags[5])),        # b2: Line loss
-                    "load_on": bool(int(flags[6])),          # b1: Load on
-                    "config_changed": bool(int(flags[7])),   # b0: Config changed
+                    "line_loss": flags[5] == '1',
+                    "load_on": flags[6] == '1',
+                    "config_changed": flags[7] == '1',
                 }
             
-            # Calcul puissance PV (V × I)
             if "pv_input_current_a" in data:
                 data["pv_input_power_w"] = round(data["pv_input_voltage"] * data["pv_input_current_a"], 1)
             else:
                 data["pv_input_power_w"] = 0.0
             
-            # Calcul puissance batterie (V × I décharge)
             if "battery_discharge_current_a" in data:
                 data["battery_power_w"] = round(data["battery_voltage"] * data["battery_discharge_current_a"], 1)
             else:
                 data["battery_power_w"] = 0.0
             
-            # Décodage mode de travail
             work_modes = {"B": "Battery", "L": "Line", "F": "Fault", "P": "PowerOn", "S": "Standby", "H": "PowerSaving"}
             data["work_mode_decoded"] = work_modes.get(data["work_mode"], "Unknown")
             
@@ -244,10 +223,6 @@ class VoltronicParser:
     
     @staticmethod
     def parse_qpigs(resp: bytes) -> Dict[str, Any]:
-        """
-        Parse QPIGS response - General status parameters inquiry
-        Format selon protocole Voltronic section 2.7
-        """
         try:
             txt = resp.strip().decode(errors="ignore").split('\r')[0]
             if txt.startswith("("):
@@ -277,21 +252,19 @@ class VoltronicParser:
                 "battery_discharge_current_a": VoltronicParser.safe_int(fields[15]),
             }
             
-            # Status flags (b7b6b5b4b3b2b1b0)
             if len(fields) > 16:
                 status = fields[16]
                 data["device_status"] = {
-                    "sbu_priority": bool(int(status[0])) if len(status) > 0 else False,
-                    "config_changed": bool(int(status[1])) if len(status) > 1 else False,
-                    "scc_firmware_updated": bool(int(status[2])) if len(status) > 2 else False,
-                    "load_on": bool(int(status[3])) if len(status) > 3 else False,
-                    "battery_voltage_steady": bool(int(status[4])) if len(status) > 4 else False,
-                    "charging_on": bool(int(status[5])) if len(status) > 5 else False,
-                    "scc_charging_on": bool(int(status[6])) if len(status) > 6 else False,
-                    "ac_charging_on": bool(int(status[7])) if len(status) > 7 else False,
+                    "sbu_priority": status[0] == '1' if len(status) > 0 else False,
+                    "config_changed": status[1] == '1' if len(status) > 1 else False,
+                    "scc_firmware_updated": status[2] == '1' if len(status) > 2 else False,
+                    "load_on": status[3] == '1' if len(status) > 3 else False,
+                    "battery_voltage_steady": status[4] == '1' if len(status) > 4 else False,
+                    "charging_on": status[5] == '1' if len(status) > 5 else False,
+                    "scc_charging_on": status[6] == '1' if len(status) > 6 else False,
+                    "ac_charging_on": status[7] == '1' if len(status) > 7 else False,
                 }
             
-            # Champs additionnels QPIGS
             if len(fields) > 17:
                 data["battery_voltage_offset"] = VoltronicParser.safe_int(fields[17])
             if len(fields) > 18:
@@ -299,7 +272,6 @@ class VoltronicParser:
             if len(fields) > 19:
                 data["pv_charging_power_w"] = VoltronicParser.safe_int(fields[19])
             
-            # Calculs dérivés
             data["pv_input_power_w"] = round(data["pv_input_voltage"] * data["pv_input_current_a"], 1)
             data["battery_power_w"] = round(data["battery_voltage"] * data["battery_discharge_current_a"], 1)
             
@@ -310,10 +282,6 @@ class VoltronicParser:
     
     @staticmethod
     def parse_qpiri(resp: bytes) -> Dict[str, Any]:
-        """
-        Parse QPIRI response - Inverter rated information inquiry
-        Format selon protocole Voltronic section 2.5
-        """
         try:
             txt = resp.strip().decode(errors="ignore").split('\r')[0]
             if txt.startswith("("):
@@ -348,7 +316,6 @@ class VoltronicParser:
                 "topology": VoltronicParser.safe_int(fields[20]) if len(fields) > 20 else 0,
             }
             
-            # Champs additionnels
             if len(fields) > 21:
                 data["output_mode"] = VoltronicParser.safe_int(fields[21])
             if len(fields) > 22:
@@ -358,7 +325,6 @@ class VoltronicParser:
             if len(fields) > 24:
                 data["pv_power_balance"] = VoltronicParser.safe_int(fields[24])
             
-            # Décodages
             battery_types = {0: "AGM", 1: "Flooded", 2: "User"}
             data["battery_type_decoded"] = battery_types.get(data["battery_type"], "Unknown")
             
@@ -375,62 +341,48 @@ class VoltronicParser:
     
     @staticmethod
     def parse_qpiws(resp: bytes) -> Dict[str, Any]:
-        """
-        Parse QPIWS response - Inverter Warning Status inquiry
-        Format selon protocole Voltronic section 2.10
-        32 bits: a0 à a31
-        """
         try:
             txt = resp.strip().decode(errors="ignore").split('\r')[0]
             if txt.startswith("("):
                 txt = txt[1:]
             
-            if len(txt) < 32:
-                return {"raw": txt, "error": f"incomplete_qpiws_len_{len(txt)}"}
+            if len(txt) < 32 or "NAK" in txt:
+                return {"raw": txt, "error": f"incomplete_or_nak"}
             
-            # Parse tous les bits selon le protocole
             warnings = {
-                "reserved_a0": bool(int(txt[0])),
-                "inverter_fault": bool(int(txt[1])),
-                "bus_over_fault": bool(int(txt[2])),
-                "bus_under_fault": bool(int(txt[3])),
-                "bus_soft_fail_fault": bool(int(txt[4])),
-                "line_fail_warning": bool(int(txt[5])),
-                "opv_short_warning": bool(int(txt[6])),
-                "inverter_voltage_too_low_fault": bool(int(txt[7])),
-                "inverter_voltage_too_high_fault": bool(int(txt[8])),
-                "over_temperature": bool(int(txt[9])),
-                "fan_locked": bool(int(txt[10])),
-                "battery_voltage_high": bool(int(txt[11])),
-                "battery_low_alarm_warning": bool(int(txt[12])),
-                "overcharge_fault": bool(int(txt[13])),
-                "battery_under_shutdown_warning": bool(int(txt[14])),
-                "battery_derating_warning": bool(int(txt[15])),
-                "overload": bool(int(txt[16])),
-                "eeprom_fault_warning": bool(int(txt[17])),
-                "inverter_over_current_fault": bool(int(txt[18])),
-                "inverter_soft_fail_fault": bool(int(txt[19])),
-                "self_test_fail_fault": bool(int(txt[20])),
-                "op_dc_voltage_over_fault": bool(int(txt[21])),
-                "battery_open_fault": bool(int(txt[22])),
-                "current_sensor_fail_fault": bool(int(txt[23])),
-                "battery_short_fault": bool(int(txt[24])),
-                "power_limit_warning": bool(int(txt[25])),
-                "pv_voltage_high_warning": bool(int(txt[26])),
-                "mppt_overload_fault": bool(int(txt[27])),
-                "mppt_overload_warning": bool(int(txt[28])),
-                "battery_too_low_to_charge_warning": bool(int(txt[29])),
+                "reserved_a0": txt[0] == '1',
+                "inverter_fault": txt[1] == '1',
+                "bus_over_fault": txt[2] == '1',
+                "bus_under_fault": txt[3] == '1',
+                "bus_soft_fail_fault": txt[4] == '1',
+                "line_fail_warning": txt[5] == '1',
+                "opv_short_warning": txt[6] == '1',
+                "inverter_voltage_too_low_fault": txt[7] == '1',
+                "inverter_voltage_too_high_fault": txt[8] == '1',
+                "over_temperature": txt[9] == '1',
+                "fan_locked": txt[10] == '1',
+                "battery_voltage_high": txt[11] == '1',
+                "battery_low_alarm_warning": txt[12] == '1',
+                "overcharge_fault": txt[13] == '1',
+                "battery_under_shutdown_warning": txt[14] == '1',
+                "battery_derating_warning": txt[15] == '1',
+                "overload": txt[16] == '1',
+                "eeprom_fault_warning": txt[17] == '1',
+                "inverter_over_current_fault": txt[18] == '1',
+                "inverter_soft_fail_fault": txt[19] == '1',
+                "self_test_fail_fault": txt[20] == '1',
+                "op_dc_voltage_over_fault": txt[21] == '1',
+                "battery_open_fault": txt[22] == '1',
+                "current_sensor_fail_fault": txt[23] == '1',
+                "battery_short_fault": txt[24] == '1',
+                "power_limit_warning": txt[25] == '1',
+                "pv_voltage_high_warning": txt[26] == '1',
+                "mppt_overload_fault": txt[27] == '1',
+                "mppt_overload_warning": txt[28] == '1',
+                "battery_too_low_to_charge_warning": txt[29] == '1',
             }
             
-            if len(txt) > 30:
-                warnings["reserved_a30"] = bool(int(txt[30]))
-            if len(txt) > 31:
-                warnings["reserved_a31"] = bool(int(txt[31]))
-            
-            # Déterminer fault vs warning pour les bits conditionnels
-            # Selon protocole: "Compile with a1, if a1=1, fault, otherwise warning"
             is_fault = warnings["inverter_fault"]
-            
             warnings["over_temperature_fault"] = warnings["over_temperature"] and is_fault
             warnings["over_temperature_warning"] = warnings["over_temperature"] and not is_fault
             warnings["fan_locked_fault"] = warnings["fan_locked"] and is_fault
@@ -440,12 +392,11 @@ class VoltronicParser:
             warnings["overload_fault"] = warnings["overload"] and is_fault
             warnings["overload_warning"] = warnings["overload"] and not is_fault
             
-            # Aliases pour compatibilité
             warnings["eeprom_fault"] = warnings["eeprom_fault_warning"]
             warnings["battery_sensor_alarm_warning"] = warnings["current_sensor_fail_fault"]
             warnings["pv_input_short_warning"] = warnings["opv_short_warning"]
             warnings["bat_short_warning"] = warnings["battery_short_fault"]
-            warnings["parallel_loss_warning"] = False  # Pas dans ce protocole
+            warnings["parallel_loss_warning"] = False
             warnings["parallel_invalid_sync_warning"] = False
             
             warnings["raw"] = txt
@@ -459,29 +410,13 @@ class VoltronicParser:
     
     @staticmethod
     def parse_qmod(resp: bytes) -> Dict[str, Any]:
-        """
-        Parse QMOD response - Inverter Mode inquiry
-        Format selon protocole Voltronic section 2.9
-        """
         try:
             txt = resp.strip().decode(errors="ignore").split('\r')[0]
             if txt.startswith("("):
                 txt = txt[1:]
             
-            modes = {
-                "P": "PowerOn",
-                "S": "Standby",
-                "L": "Line",
-                "B": "Battery",
-                "F": "Fault",
-                "H": "PowerSaving",
-            }
-            
-            return {
-                "raw": txt,
-                "mode_code": txt,
-                "mode": modes.get(txt, "Unknown")
-            }
+            modes = {"P": "PowerOn", "S": "Standby", "L": "Line", "B": "Battery", "F": "Fault", "H": "PowerSaving"}
+            return {"raw": txt, "mode_code": txt, "mode": modes.get(txt, "Unknown")}
         except Exception as e:
             return {"raw": resp.decode(errors="ignore"), "error": str(e)}
 
@@ -495,31 +430,23 @@ class EnergyTracker:
         
         for idx in range(inverter_count):
             self.data[idx] = {
-                "energy_produced_kwh": 0.0,
-                "energy_consumed_kwh": 0.0,
-                "pv_energy_kwh": 0.0,
-                "battery_charge_kwh": 0.0,
-                "battery_discharge_kwh": 0.0,
-                "daily_energy_kwh": 0.0,
-                "daily_pv_kwh": 0.0,
-                "_last_pv_power": 0.0,
-                "_last_load_power": 0.0,
-                "_last_battery_power": 0.0,
+                "energy_produced_kwh": 0.0, "energy_consumed_kwh": 0.0,
+                "pv_energy_kwh": 0.0, "battery_charge_kwh": 0.0,
+                "battery_discharge_kwh": 0.0, "daily_energy_kwh": 0.0,
+                "daily_pv_kwh": 0.0, "_last_pv_power": 0.0,
+                "_last_load_power": 0.0, "_last_battery_power": 0.0,
             }
             self.last_update[idx] = datetime.now()
-        
         self._load_persistent()
     
     def update(self, idx: int, qpgs_data: dict, qpigs_data: dict = None):
         now = datetime.now()
         dt = (now - self.last_update[idx]).total_seconds() / 3600.0
-        
         if dt > 0.1:
             self.last_update[idx] = now
             return
         
         d = self.data[idx]
-        
         pv_power = qpgs_data.get("pv_input_power_w", 0.0)
         load_power = qpgs_data.get("output_active_power_w", 0.0)
         batt_charge = qpgs_data.get("battery_charge_current_a", 0)
@@ -544,7 +471,6 @@ class EnergyTracker:
             d["battery_discharge_kwh"] += abs(energy_kwh)
         
         d["energy_produced_kwh"] = d["pv_energy_kwh"]
-        
         d["_last_pv_power"] = pv_power
         d["_last_load_power"] = load_power
         d["_last_battery_power"] = battery_power
@@ -605,47 +531,39 @@ class StatisticsTracker:
     def __init__(self, inverter_count: int, history_size: int = 1000):
         self.inverter_count = inverter_count
         self.data = {}
-        
         for idx in range(inverter_count):
             self.data[idx] = {
                 "pv_power_history": deque(maxlen=history_size),
                 "load_power_history": deque(maxlen=history_size),
-                "peak_power_today": 0,
-                "peak_pv_today": 0,
-                "runtime_hours_today": 0.0,
-                "warnings_count_today": 0,
+                "peak_power_today": 0, "peak_pv_today": 0,
+                "runtime_hours_today": 0.0, "warnings_count_today": 0,
                 "last_warning_type": "Aucune",
                 "last_warning_timestamp": datetime.now().isoformat(),
-                "min_load_pct_today": 100,
-                "max_load_pct_today": 0,
+                "min_load_pct_today": 100, "max_load_pct_today": 0,
                 "_start_time": datetime.now(),
             }
     
     def update(self, idx: int, qpgs_data: dict, qpiws_data: dict = None):
         d = self.data[idx]
-        
         pv_power = qpgs_data.get("pv_input_power_w", 0)
         load_power = qpgs_data.get("output_active_power_w", 0)
         load_pct = qpgs_data.get("output_load_pct", 0)
         
         d["pv_power_history"].append(pv_power)
         d["load_power_history"].append(load_power)
-        
         d["peak_power_today"] = max(d["peak_power_today"], load_power)
         d["peak_pv_today"] = max(d["peak_pv_today"], pv_power)
         d["min_load_pct_today"] = min(d["min_load_pct_today"], load_pct)
         d["max_load_pct_today"] = max(d["max_load_pct_today"], load_pct)
-        
         d["runtime_hours_today"] = (datetime.now() - d["_start_time"]).total_seconds() / 3600
         
-        if qpiws_data:
-            if qpiws_data.get("any_warning") or qpiws_data.get("any_fault"):
-                d["warnings_count_today"] += 1
-                d["last_warning_timestamp"] = datetime.now().isoformat()
-                for key, val in qpiws_data.items():
-                    if isinstance(val, bool) and val and ("warning" in key or "fault" in key):
-                        d["last_warning_type"] = key.replace("_", " ").title()
-                        break
+        if qpiws_data and (qpiws_data.get("any_warning") or qpiws_data.get("any_fault")):
+            d["warnings_count_today"] += 1
+            d["last_warning_timestamp"] = datetime.now().isoformat()
+            for key, val in qpiws_data.items():
+                if isinstance(val, bool) and val and ("warning" in key or "fault" in key):
+                    d["last_warning_type"] = key.replace("_", " ").title()
+                    break
     
     def get_data(self, idx: int) -> dict:
         d = self.data[idx]
@@ -677,26 +595,18 @@ class InfoTracker:
         self.inverter_count = inverter_count
         self.boot_time = datetime.now()
         self.data = {}
-        
         for idx in range(inverter_count):
             self.data[idx] = {
-                "serial_number": "",
-                "firmware_version": "",
-                "firmware_version_scc": "",
-                "model_number": "",
-                "uptime_days": 0,
-                "uptime_hours": 0,
-                "communication_errors": 0,
-                "last_successful_poll": None,
-                "poll_success_rate_pct": 100.0,
-                "mqtt_signal_quality": 100,
+                "serial_number": "", "firmware_version": "",
+                "firmware_version_scc": "", "model_number": "",
+                "uptime_days": 0, "uptime_hours": 0,
+                "communication_errors": 0, "last_successful_poll": None,
+                "poll_success_rate_pct": 100.0, "mqtt_signal_quality": 100,
                 "last_restart_timestamp": self.boot_time.isoformat(),
-                "_poll_attempts": 0,
-                "_poll_success": 0,
+                "_poll_attempts": 0, "_poll_success": 0,
             }
     
     def set_firmware_info(self, idx: int, fw_main: str = "", fw_scc: str = "", model: str = ""):
-        """Met à jour les informations firmware pour un onduleur"""
         if fw_main:
             self.data[idx]["firmware_version"] = fw_main
         if fw_scc:
@@ -712,7 +622,6 @@ class InfoTracker:
             d["_poll_success"] += 1
             d["last_successful_poll"] = datetime.now().isoformat()
             d["serial_number"] = qpgs_data.get("serial_number", "")
-            # Ne pas écraser firmware_version si déjà défini par QVFW
             if not d["firmware_version"]:
                 d["firmware_version"] = str(qpgs_data.get("eeprom_version", "Unknown"))
         else:
@@ -736,8 +645,7 @@ class MQTTPublisher:
         self.topic_prefix = topic_prefix
         self.debug = debug
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, 
-                                  client_id="wks-monitor-v4", 
-                                  clean_session=True)
+                                  client_id="wks-monitor-v4", clean_session=True)
         if user:
             self.client.username_pw_set(user, password)
         self.client.connect(host, port, keepalive=30)
@@ -750,91 +658,36 @@ class MQTTPublisher:
             log(f"[MQTT] Published to {topic}")
 
 
-def query_firmware_versions(sr: SerialReader, mqtt_pub: MQTTPublisher, info_tracker: InfoTracker, inverter_count: int):
-    """
-    Interroge les versions firmware des onduleurs au démarrage
-    Publie les résultats sur MQTT et met à jour InfoTracker
-    """
+def query_firmware_versions(sr: SerialReader, mqtt_pub: MQTTPublisher, info_tracker, inverter_count: int):
+    """Interroge les versions firmware au démarrage"""
     log("[FIRMWARE] 📋 Interrogation versions firmware...")
     
     firmware_data = {
-        "main_cpu": "",
-        "scc_cpu": "",
-        "model_number": "",
-        "protocol_id": "",
-        "query_timestamp": datetime.now().isoformat()
+        "main_cpu": "", "scc_cpu": "", "model_number": "",
+        "protocol_id": "", "query_timestamp": datetime.now().isoformat()
     }
     
-    # QVFW - Main CPU Firmware
-    resp = sr.query("QVFW")
-    if resp:
-        txt = resp.decode(errors="ignore").strip()
-        if txt.startswith("("):
-            txt = txt[1:]
-        # Vérifier si c'est un NAK
-        if "NAK" not in txt:
-            firmware_data["main_cpu"] = txt
-            log(f"[FIRMWARE] QVFW (Main CPU): {txt}")
+    for cmd, key in [("QVFW", "main_cpu"), ("QVFW2", "scc_cpu"), ("QGMN", "model_number"), ("QPI", "protocol_id")]:
+        resp = sr.query(cmd)
+        if resp:
+            txt = resp.decode(errors="ignore").strip()
+            if txt.startswith("("):
+                txt = txt[1:]
+            if "NAK" not in txt:
+                firmware_data[key] = txt
+                log(f"[FIRMWARE] {cmd}: {txt}")
+            else:
+                log(f"[FIRMWARE] {cmd}: NAK (commande non supportée)")
         else:
-            log(f"[FIRMWARE] QVFW: NAK (commande non supportée)")
-    else:
-        log("[FIRMWARE] QVFW: Pas de réponse")
-    time.sleep(0.3)
+            log(f"[FIRMWARE] {cmd}: Pas de réponse")
+        time.sleep(0.3)
     
-    # QVFW2 - SCC CPU Firmware
-    resp = sr.query("QVFW2")
-    if resp:
-        txt = resp.decode(errors="ignore").strip()
-        if txt.startswith("("):
-            txt = txt[1:]
-        if "NAK" not in txt:
-            firmware_data["scc_cpu"] = txt
-            log(f"[FIRMWARE] QVFW2 (SCC CPU): {txt}")
-        else:
-            log(f"[FIRMWARE] QVFW2: NAK (commande non supportée)")
-    else:
-        log("[FIRMWARE] QVFW2: Pas de réponse")
-    time.sleep(0.3)
-    
-    # QGMN - General Model Name
-    resp = sr.query("QGMN")
-    if resp:
-        txt = resp.decode(errors="ignore").strip()
-        if txt.startswith("("):
-            txt = txt[1:]
-        if "NAK" not in txt:
-            firmware_data["model_number"] = txt
-            log(f"[FIRMWARE] QGMN (Model): {txt}")
-        else:
-            log(f"[FIRMWARE] QGMN: NAK (commande non supportée)")
-    else:
-        log("[FIRMWARE] QGMN: Pas de réponse")
-    time.sleep(0.3)
-    
-    # QPI - Protocol ID
-    resp = sr.query("QPI")
-    if resp:
-        txt = resp.decode(errors="ignore").strip()
-        if txt.startswith("("):
-            txt = txt[1:]
-        if "NAK" not in txt:
-            firmware_data["protocol_id"] = txt
-            log(f"[FIRMWARE] QPI (Protocol): {txt}")
-        else:
-            log(f"[FIRMWARE] QPI: NAK (commande non supportée)")
-    else:
-        log("[FIRMWARE] QPI: Pas de réponse")
-    
-    # Publier sur MQTT
     mqtt_pub.publish("firmware", firmware_data)
     
-    # Mettre à jour InfoTracker pour tous les onduleurs
-    # (En mode parallèle, tous partagent le même firmware normalement)
     if info_tracker:
         fw_main = firmware_data["main_cpu"].replace("VERFW:", "")
         fw_scc = firmware_data["scc_cpu"].replace("VERFW2:", "")
         model = firmware_data["model_number"]
-        
         for idx in range(inverter_count):
             info_tracker.set_firmware_info(idx, fw_main, fw_scc, model)
     
@@ -859,9 +712,9 @@ def main():
     
     enable_qpigs = bool(opt.get("enable_qpigs", True))
     enable_qpiri = bool(opt.get("enable_qpiri", True))
-    enable_qpiws = bool(opt.get("enable_qpiws", True))
-    enable_qmod = bool(opt.get("enable_qmod", False))
-    enable_firmware_query = bool(opt.get("enable_firmware_query", True))
+    enable_qpiws = bool(opt.get("enable_qpiws", False))  # Désactivé par défaut
+    enable_qmod = bool(opt.get("enable_qmod", False))    # Désactivé par défaut
+    enable_firmware_query = bool(opt.get("enable_firmware_query", False))  # Désactivé par défaut
     
     enable_energy = bool(opt.get("enable_energy_tracking", True))
     enable_statistics = bool(opt.get("enable_statistics", True))
@@ -873,10 +726,16 @@ def main():
     mqtt_pass = opt.get("mqtt_password", "")
     topic_prefix = opt.get("mqtt_topic_prefix", "wks")
 
-    log(f"[BOOT] 🚀 WKS Monitor v4.2.1 - Polling {poll_interval}s")
+    log(f"[BOOT] 🚀 WKS Monitor v4.3.0 - Polling {poll_interval}s")
     log(f"[BOOT] Port: {port} @ {baudrate} | Onduleurs: {inverter_count}")
     log(f"[BOOT] Modules v4: Energy={enable_energy} Stats={enable_statistics} Info={enable_info}")
-    log(f"[BOOT] Commandes: QPGS + {'QPIGS ' if enable_qpigs else ''}{'QPIRI ' if enable_qpiri else ''}{'QPIWS ' if enable_qpiws else ''}{'QMOD ' if enable_qmod else ''}{'QVFW ' if enable_firmware_query else ''}")
+    cmds = "QPGS"
+    if enable_qpigs: cmds += " QPIGS"
+    if enable_qpiri: cmds += " QPIRI"
+    if enable_qpiws: cmds += " QPIWS"
+    if enable_qmod: cmds += " QMOD"
+    if enable_firmware_query: cmds += " QVFW"
+    log(f"[BOOT] Commandes: {cmds}")
 
     sr = SerialReader(port, baudrate, read_timeout, open_retry_sec, debug)
     sr.open()
@@ -889,12 +748,10 @@ def main():
         sys.exit(1)
 
     parser = VoltronicParser()
-    
     energy_tracker = EnergyTracker(inverter_count) if enable_energy else None
     stats_tracker = StatisticsTracker(inverter_count) if enable_statistics else None
     info_tracker = InfoTracker(inverter_count) if enable_info else None
     
-    # Interrogation firmware au démarrage
     if enable_firmware_query:
         query_firmware_versions(sr, mqtt_pub, info_tracker, inverter_count)
     
@@ -921,7 +778,7 @@ def main():
             qpigs_data = {}
             qpiws_data = {}
             
-            # QPGS - Parallel Information
+            # QPGS - Parallel Information (commande principale)
             resp = sr.query(f"QPGS{idx}")
             if resp and len(resp) > 10:
                 qpgs_data = parser.parse_qpgs(resp)
@@ -934,8 +791,6 @@ def main():
                             f"PV: {qpgs_data.get('pv_input_power_w', 0)}W")
                 else:
                     consecutive_fail += 1
-                    if debug:
-                        log(f"[ERR] QPGS{idx}: {qpgs_data.get('error')}")
             else:
                 consecutive_fail += 1
             
@@ -948,73 +803,15 @@ def main():
                     qpigs_data = parser.parse_qpigs(resp)
                     if "error" not in qpigs_data:
                         mqtt_pub.publish(f"{idx}/general", qpigs_data)
-                        if debug:
-                            log(f"[OK] QPIGS: Temp={qpigs_data.get('heatsink_temp')}°C | "
-                                f"Bus={qpigs_data.get('bus_voltage')}V")
-                    time.sleep(0.05)
+                time.sleep(0.05)
             
             # QPIWS - Warnings
             if enable_qpiws:
-                default_warnings = {
-                    "any_fault": False,
-                    "any_warning": False,
-                    "inverter_fault": False,
-                    "bus_over_fault": False,
-                    "bus_under_fault": False,
-                    "bus_soft_fail_fault": False,
-                    "line_fail_warning": False,
-                    "opv_short_warning": False,
-                    "inverter_voltage_too_low_fault": False,
-                    "inverter_voltage_too_high_fault": False,
-                    "over_temperature_fault": False,
-                    "over_temperature_warning": False,
-                    "fan_locked_warning": False,
-                    "battery_voltage_high_warning": False,
-                    "battery_low_alarm_warning": False,
-                    "battery_under_shutdown_warning": False,
-                    "battery_sensor_alarm_warning": False,
-                    "overload_fault": False,
-                    "overload_warning": False,
-                    "eeprom_fault": False,
-                    "inverter_over_current_fault": False,
-                    "inverter_soft_fail_fault": False,
-                    "self_test_fail_warning": False,
-                    "op_dc_voltage_over_warning": False,
-                    "battery_open_warning": False,
-                    "current_sensor_fail_warning": False,
-                    "bat_short_warning": False,
-                    "power_limit_warning": False,
-                    "pv_voltage_high_warning": False,
-                    "pv_input_short_warning": False,
-                    "mppt_overload_fault": False,
-                    "mppt_overload_warning": False,
-                    "battery_too_low_to_charge_warning": False,
-                    "parallel_loss_warning": False,
-                    "parallel_invalid_sync_warning": False,
-                    "raw": "NO_RESPONSE"
-                }
-                
                 resp = sr.query("QPIWS", extra_wait=0.15)
-                
-                if debug and iteration_count <= 3:
-                    if resp:
-                        log(f"[DEBUG-QPIWS{idx}] Réponse: {resp.hex()} | Len: {len(resp)}")
-                    else:
-                        log(f"[DEBUG-QPIWS{idx}] Aucune réponse")
-                
                 if resp and len(resp) >= 3:
                     qpiws_data = parser.parse_qpiws(resp)
                     if "error" not in qpiws_data:
                         mqtt_pub.publish(f"{idx}/warnings", qpiws_data)
-                        if debug:
-                            log(f"[QPIWS{idx}] ✅ Fault={qpiws_data.get('any_fault')} Warning={qpiws_data.get('any_warning')}")
-                    else:
-                        mqtt_pub.publish(f"{idx}/warnings", default_warnings)
-                        if debug and iteration_count <= 3:
-                            log(f"[QPIWS{idx}] ⚠️ Parse error: {qpiws_data.get('error')}")
-                else:
-                    mqtt_pub.publish(f"{idx}/warnings", default_warnings)
-                
                 time.sleep(0.05)
             
             # QMOD - Mode
@@ -1022,12 +819,11 @@ def main():
                 resp = sr.query("QMOD")
                 if resp and len(resp) > 1:
                     data = parser.parse_qmod(resp)
-                    if "error" not in data:
+                    if "error" not in data and "NAK" not in data.get("raw", ""):
                         mqtt_pub.publish(f"{idx}/mode", data)
-                    time.sleep(0.05)
+                time.sleep(0.05)
             
-            # === MODULES V4 ===
-            
+            # Modules v4
             if energy_tracker and qpgs_data and "error" not in qpgs_data:
                 energy_tracker.update(idx, qpgs_data, qpigs_data)
                 mqtt_pub.publish(f"{idx}/energy", energy_tracker.get_data(idx))
@@ -1040,7 +836,7 @@ def main():
                 info_tracker.update(idx, qpgs_data, success=("error" not in qpgs_data))
                 mqtt_pub.publish(f"{idx}/info", info_tracker.get_data(idx))
         
-        # QPIRI - Rating Info (une seule fois pour tous)
+        # QPIRI - Rating Info
         if enable_qpiri and (not qpiri_cached or iteration_count % 10 == 0):
             resp = sr.query("QPIRI")
             if resp and len(resp) > 10:
@@ -1053,7 +849,7 @@ def main():
         if energy_tracker and iteration_count % 60 == 0:
             energy_tracker._save_persistent()
 
-        # Gestion échecs consécutifs
+        # Gestion échecs
         if any_ok:
             consecutive_fail = 0
         elif consecutive_fail >= max_consecutive_fail:
