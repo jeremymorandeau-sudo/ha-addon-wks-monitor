@@ -1,0 +1,69 @@
+name: "WKS Monitor"
+version: "4.2.0"
+slug: "wks_monitor"
+description: "Monitoring complet onduleurs WKS/Voltronic - QPGS, QPIGS, QPIRI, QPIWS, QMOD, QVFW"
+arch:
+  - amd64
+  - armv7
+  - aarch64
+startup: application
+boot: auto
+uart: true
+init: false
+homeassistant_api: false
+apparmor: false
+options:
+  port: "/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BWAAc143M08-if00-port0"
+  baudrate: 2400
+  inverter_count: 3
+  poll_interval: 2.0
+  # MQTT
+  mqtt_host: "core-mosquitto.local.hass.io"
+  mqtt_port: 1883
+  mqtt_user: "jeremy"
+  mqtt_password: ""
+  mqtt_topic_prefix: "wks"
+  # Debugging
+  debug: true
+  read_timeout: 2.5
+  open_retry_sec: 3
+  max_consecutive_fail: 10
+  # Options commandes
+  enable_qpigs: true
+  enable_qpiri: true
+  enable_qpiws: true
+  enable_qmod: false
+  enable_firmware_query: true
+  # Options modules v4
+  enable_energy_tracking: true
+  enable_statistics: true
+  enable_info: true
+schema:
+  port: str
+  baudrate: int
+  inverter_count: int(1,10)
+  poll_interval: float(0.5,30.0)
+  mqtt_host: str
+  mqtt_port: port
+  mqtt_user: str?
+  mqtt_password: password?
+  mqtt_topic_prefix: str
+  debug: bool
+  read_timeout: float(1.0,10.0)
+  open_retry_sec: int(1,60)
+  max_consecutive_fail: int(3,100)
+  # Options commandes
+  enable_qpigs: bool
+  enable_qpiri: bool
+  enable_qpiws: bool
+  enable_qmod: bool
+  enable_firmware_query: bool
+  # Options modules v4
+  enable_energy_tracking: bool
+  enable_statistics: bool
+  enable_info: bool
+privileged:
+  - SYS_RAWIO
+stdin: true
+ingress: false
+ports: {}
