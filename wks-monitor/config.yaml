@@ -1,5 +1,5 @@
 name: "WKS Monitor"
-version: "4.2.20"
+version: "4.2.21"
 slug: "wks_monitor"
 description: "Monitoring complet onduleurs WKS/Voltronic - QPGS, QPIGS, QPIRI, QPIWS, QMOD, QVFW"
 arch:
