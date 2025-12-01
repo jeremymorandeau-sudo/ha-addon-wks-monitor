@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
 
-if [ -f /data/options.json ]; then
-  echo "🔧 Chargement des options /data/options.json"
-else
-  echo "❌ options.json introuvable — add-on Home Assistant requis" >&2
-  exit 1
+echo "🔧 Chargement des options /data/options.json"
+
+# Restaurer le backup si le patch pose problème
+if [ -f "/app/wks_monitor.py.backup.20251201_180411" ]; then
+    echo "⚠️ Restauration du backup..."
+    cp /app/wks_monitor.py.backup.20251201_180411 /app/wks_monitor.py
+    echo "✅ Backup restauré"
 fi
 
-# Patcher wks_monitor.py au premier démarrage si nécessaire
-if [ ! -f "/data/wks_patched" ]; then
-    echo "🔧 Premier démarrage - Application du patch..."
-    python3 patch_wks_monitor.py wks_monitor.py
-    if [ $? -eq 0 ]; then
-        echo "✅ Patch appliqué avec succès"
-        touch /data/wks_patched
-    else
-        echo "⚠️ Erreur lors du patch - Vérifier les logs"
-    fi
-fi
+# Démarrer l'addon sans patch
+echo "🚀 Démarrage de l'addon..."
+python3 wks_monitor.py
